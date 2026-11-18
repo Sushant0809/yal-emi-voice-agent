@@ -1,0 +1,13 @@
+{
+  "LF-1001": [{"date": "2026-11-05", "amount": 12500, "status": "received"}],
+  "LF-1002": [{"date": "2026-10-10", "amount": 4850, "status": "received"}],
+  "LF-1003": [{"date": "2026-11-01", "amount": 38200, "status": "received"}],
+  "LF-1004": [{"date": "2026-09-25", "amount": 2999, "status": "received"}],
+  "LF-1005": [{"date": "2026-10-28", "amount": 64000, "status": "received"}],
+  "LF-1006": [{"date": "2026-10-05", "amount": 9375, "status": "received"}],
+  "LF-1007": [{"date": "2026-11-10", "amount": 21750, "status": "received"}],
+  "LF-1008": [
+    {"date": "2026-11-17", "amount": 7200, "status": "processing"},
+    {"date": "2026-10-20", "amount": 7200, "status": "received"}
+  ]
+}

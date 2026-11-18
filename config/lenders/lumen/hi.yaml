@@ -1,0 +1,36 @@
+# Hindi phrase pack. Amounts and dates are verbalised in Hindi by agent/speech.py
+# ("अड़तीस हज़ार दो सौ रुपये", "एक दिसंबर"). The brand stays in Latin script.
+
+greeting: "नमस्ते, मैं {lender} से {agent_name} बोल रही हूँ। क्या मेरी बात {name} जी से हो रही है?"
+
+reminder_due: >-
+  धन्यवाद {first_name} जी, वेरिफ़िकेशन हो गया। आपके {loan_type} की {amount} की किस्त
+  {due_date} को देय है। क्या आप तब तक इसका भुगतान कर पाएँगे?
+reminder_overdue: >-
+  धन्यवाद {first_name} जी, वेरिफ़िकेशन हो गया। आपके {loan_type} की {amount} की किस्त
+  {due_date} को देय थी, यानी {days_overdue} की देरी हो चुकी है। आप इसे कैसे भरना चाहेंगे?
+
+fillers:
+  verify_identity: "धन्यवाद, एक पल।"
+  check_payment_status: "एक मिनट, मैं चेक करती हूँ।"
+  send_payment_link: "जी, मैं अभी भेज रही हूँ।"
+
+idle_prompts:
+  - "हेलो, क्या आप लाइन पर हैं?"
+  - "मुझे आपकी आवाज़ नहीं आ रही। क्या आप मुझे सुन पा रहे हैं?"
+idle_goodbye: "लगता है लाइन कट गई है। मैं आपको बाद में फिर से कॉल करूँगी। नमस्ते।"
+
+recovery:
+  apology: "माफ़ कीजिए, लाइन एक पल के लिए कट गई थी।"
+  ask_again: "माफ़ कीजिए, लाइन एक पल के लिए कट गई थी। क्या आप दोबारा बता सकते हैं?"
+
+fallback_goodbye: "आपका समय देने के लिए धन्यवाद। नमस्ते।"
+
+loan_types:
+  Personal Loan: पर्सनल लोन
+  Two-Wheeler Loan: टू-व्हीलर लोन
+  Home Loan: होम लोन
+  Consumer Durable Loan: कंज़्यूमर ड्यूरेबल लोन
+  Business Loan: बिज़नेस लोन
+  Tractor Loan: ट्रैक्टर लोन
+  Education Loan: एजुकेशन लोन

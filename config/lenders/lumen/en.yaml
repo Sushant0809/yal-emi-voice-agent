@@ -1,0 +1,40 @@
+# English phrase pack. {placeholders} are filled from the lender and borrower records,
+# with amounts and dates already in spoken form ("twelve thousand five hundred rupees").
+# Allowed placeholders per phrase are checked at start-up (agent/phrases.py).
+
+greeting: "Hello, this is {agent_name} calling from {lender}. Am I speaking with {name}?"
+
+# Spoken right after a successful verification (no previous calls), instead of waiting
+# for the LLM. With previous calls the LLM writes it, since history needs judgement.
+reminder_due: >-
+  Thanks, {first_name}, you're verified. Your {loan_type} EMI of {amount} is due on
+  {due_date}. Will you be able to pay it by then?
+reminder_overdue: >-
+  Thanks, {first_name}, you're verified. Your {loan_type} EMI of {amount} was due on
+  {due_date}, so it's {days_overdue} overdue. How would you like to take care of it?
+
+fillers:
+  verify_identity: "Thanks, one moment."
+  check_payment_status: "Let me just check that for you."
+  send_payment_link: "Sure, I'm sending that to you now."
+
+idle_prompts:
+  - "Hello, are you still there?"
+  - "I can't hear you. Can you hear me?"
+idle_goodbye: "It seems we've lost the connection. I'll try you again later. Goodbye."
+
+recovery:
+  apology: "Sorry, the line broke up for a second."
+  ask_again: "Sorry, the line broke up for a second. Could you say that again?"
+
+fallback_goodbye: "Thank you for your time. Goodbye."
+
+# How loan types are said in this language (keys match data/borrowers.json).
+loan_types:
+  Personal Loan: personal loan
+  Two-Wheeler Loan: two-wheeler loan
+  Home Loan: home loan
+  Consumer Durable Loan: consumer durable loan
+  Business Loan: business loan
+  Tractor Loan: tractor loan
+  Education Loan: education loan

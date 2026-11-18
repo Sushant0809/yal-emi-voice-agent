@@ -1,0 +1,9 @@
+# One folder per lender. Everything the agent says verbatim lives in the language
+# files next to this one; the conversation itself is written by the LLM.
+name: Lumen Finance
+agent_name: Asha
+# Optional: the agent's name as written in other languages' scripts
+agent_names:
+  hi: आशा
+languages: [en, hi]
+default_language: en
