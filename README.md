@@ -2,7 +2,7 @@
 
 An outbound voice agent that reminds borrowers about upcoming or overdue EMIs. It verifies who it's talking to, states the amount clearly, finds out what the borrower intends to do, offers a payment link, and records a structured outcome. It's built on [Pipecat](https://github.com/pipecat-ai/pipecat) and runs in the browser on a laptop.
 
-> Status: working end to end. Full eval suite (19 scenarios × 2) passes 38/38 with 0 guardrail violations, and the payment-link failure scenario passes 3/3; median voice-to-voice latency 2.25s on live calls, p95 4.72s (see the layer-by-layer table).
+> Status: working end to end. Full eval suite (20 scenarios × 2, prompt `goals-v2`) passes 40/40 with 0 guardrail violations; median voice-to-voice latency 2.22s on live calls, p95 2.92s (see the layer-by-layer table).
 
 ## Quick start
 
@@ -59,7 +59,7 @@ Browser speaker <--WebRTC-- Cartesia Sonic <-- speech formatter <-- Claude (tool
 4. **One brain, two bodies.** `agent/tools.py`, `agent/prompts.py` and `agent/call_state.py` don't depend on Pipecat. The live bot (`agent/bot.py`) and the eval agent (`evals/text_agent.py`) share them, so the evals test the same guardrails the caller hits.
 5. **Pre-rendered spoken amounts.** `verify_identity` returns `emi_amount_spoken` and `due_date_spoken` alongside the raw values, so the model rarely has to convert numbers to words. The TTS transform catches the rest.
 6. **Goals, not a script; tools as a registry.** The system prompt describes what a good call achieves, the rules that always hold, and how to handle each situation, and never names a tool (a test enforces it). The model decides which tool to call from each tool's own description. A tool is one declaration in `agent/tools.py`: description, schema, handler, plus `requires_verification`, `filler` and `ends_call`. One gate refuses every verification-gated tool, including tools added later. `check_payment_status` was added this way with no prompt or bot change.
-7. **The goodbye is spoken by code.** `end_call` has a required `goodbye` field that the bot always speaks. Sonnet 5.5 sometimes returns the text it writes just before a tool call as a hidden reasoning block, which made calls end in silence. Now every call ends with a spoken goodbye (38/38 in the evals).
+7. **The goodbye is spoken by code.** `end_call` has a required `goodbye` field that the bot always speaks. Sonnet 5.5 sometimes returns the text it writes just before a tool call as a hidden reasoning block, which made calls end in silence. Now every call ends with a spoken goodbye (40/40 in the latest eval run).
 
 ## Lenders, languages and fixed phrases
 
@@ -187,30 +187,30 @@ Every outcome record, history row, eval summary and trace carries `prompt_versio
 
 "Normalised" maps month names and number words to one token in either script: Flux often writes "December" in a Hindi sentence, which is correct. **These are upper bounds.** The clips are synthesised by Cartesia, which is much cleaner than a caller on a phone line, and live transcripts do show garbling ("pay on the pixel", handled by the confirm-back rule). Each case can point to a real recording (`audio:`). Recording 20 real clips, ideally over a phone line, is the way to get real numbers.
 
-**Latest full run (Sonnet 5.5):** 38/38 runs pass, 0 guardrail violations, tone 4.87, empathy 3.97, naturalness 4.32; every goodbye spoken; prompt cache hit on 153 of 158 LLM calls. Payment-link failure: 3/3, tone 5.0.
+**Latest full run (Sonnet 5.5, prompt `goals-v2`, 21 Nov):** 40/40 runs pass, 0 guardrail violations, tone 4.80, empathy 3.88, naturalness 4.42; every goodbye spoken (40/40); 0 raw digits read out; prompt cache hit on 164 of 176 LLM calls. Details and the weakest scores are in REPORT.md.
 
 ## Latency work and findings
 
 ### Current latency, layer by layer
 
-Measured on live browser calls from India with the current setup (Flux, Sonnet 5.5, Cartesia, templated turns): 25 turns across 8 calls. Each turn runs from the moment the caller stops speaking until Asha's first audio plays. Source: `UserBotLatencyObserver`, logged per turn to `outcomes/latency.jsonl`.
+Measured on live browser calls from India with the current setup (Flux, Sonnet 5.5, Cartesia in sentence mode, templated turns): 44 turns across 11 calls (18–21 Nov). Each turn runs from the moment the caller stops speaking until Asha's first audio plays. Source: `UserBotLatencyObserver`, logged per turn to `outcomes/latency.jsonl`.
 
 | Layer | What happens | p50 | p95 | Range |
 |---|---|---|---|---|
 | Endpointing wait | VAD confirms the caller has gone quiet (`stop_secs`) | 0.20s | 0.20s | fixed |
-| Speech-to-text | Deepgram Flux final transcript (includes ~0.35s network round trip to the US) | 0.27s | 0.65s | 0.10–0.92s |
+| Speech-to-text | Deepgram Flux final transcript (includes ~0.35s network round trip to the US) | 0.31s | 0.92s | 0.10–0.95s |
 | Turn detection | Flux decides the turn is over (eager end-of-turn; the LLM already started) | 0.00s | 0.01s | |
-| LLM | Claude Sonnet 5.5, time to first spoken token (cached prompt, low effort) | 1.09s | 2.14s | 0.71–5.98s (the max was one uncached first turn, now fixed) |
-| LLM tool call (tool turns only) | Generating the tool call before the filler or template plays | 0.57s | 2.84s | 0.23–2.84s (9 turns) |
-| Tool handler | Our code (`verify_identity`, `check_payment_status`) | 0.01s | 0.01s | |
-| Sentence wait (sentence mode only) | First full sentence before TTS starts | 0.68s | | one turn measured |
-| Text-to-speech | Cartesia Sonic-3, time to first audio | 0.29s | 0.74s | 0.12–0.74s |
-| Pipeline | Frame handling, transport | 0.13s | 0.63s | 0–0.64s |
-| **Total, voice to voice** | | **2.25s** | **4.72s** | 1.42–7.17s; p90 2.87s |
+| LLM | Claude Sonnet 5.5, time to first spoken token (cached prompt, low effort) | 1.01s | 1.34s | 0.65–5.98s (the max was one uncached first turn, since fixed) |
+| LLM tool call (tool turns only) | Generating the tool call before the filler or template plays | 0.56s | 2.84s | 0.23–2.84s (12 turns) |
+| Tool handler | Our code (`verify_identity`, `check_payment_status`) | 0.01s | 0.03s | |
+| Sentence wait | First full sentence before TTS starts | 0.57s | 0.77s | 0.33–0.77s (14 turns) |
+| Text-to-speech | Cartesia Sonic-3, time to first audio | 0.14s | 0.73s | 0.11–0.74s |
+| Pipeline | Frame handling, transport | 0.00s | 0.63s | 0–0.64s |
+| **Total, voice to voice** | | **2.22s** | **2.92s** | 0.87–7.17s; p90 2.71s |
 
-Percentiles are nearest-rank, from `uv run python -m evals.latency_report`. Split by turn type: replies the LLM answers directly have a p50 of **2.22s**; turns with a tool call have a p50 of **2.37s**. On tool turns the caller hears a filler line ("Thanks, one moment") at that point, so the wait for the real answer is covered. With 25 turns, p95 is set by the two slowest, so it will move as more calls are logged.
+Percentiles are nearest-rank, from `uv run python -m evals.latency_report --since 20261118T1722`. Split by turn type: replies the LLM answers directly have a p50 of **2.20s**; turns with a tool call have a p50 of **2.34s**. On tool turns the caller hears a filler line ("Thanks, one moment") at that point, so the wait for the real answer is covered.
 
-**Interruption rate** (the share of Asha's turns the caller cut off) is logged per turn to `outcomes/turns.jsonl` from 21 Nov and shown by the same report. The calls above predate it, so there is no number yet.
+**Interruption rate** (the share of Asha's turns the caller cut off) is logged per turn to `outcomes/turns.jsonl` from 21 Nov and shown by the same report: 3 of 22 turns (14%) on the three 21 Nov demo calls, all deliberate barge-ins. Asha stopped each time.
 
 The LLM is about half of every turn. The model comparison in finding 14 showed that the fastest open-weight models would save about 0.3s, but they failed the safety checks. The next largest fixed cost is the network round trip from India to US-hosted STT and LLM endpoints.
 
@@ -255,7 +255,7 @@ Failures the evals found:
 
     | Model | Runs passing | Guardrail violations | Tone / empathy / naturalness | Time to first token |
     |---|---|---|---|---|
-    | **Claude Sonnet 5.5** | **38/38** | **0** | 4.87 / 3.97 / 4.32 | 0.89s |
+    | **Claude Sonnet 5.5** (prompt `goals-v1`) | **38/38** | **0** | 4.87 / 3.97 / 4.32 | 0.89s |
     | Qwen 3.8 27B (Cerebras) | 31/38 | 1 | 4.63 / 3.66 / 4.11 | 0.64s |
     | gpt-oss-120b (Cerebras) | 14/38 | 6 | 3.71 / 2.76 / 2.42 | 0.56s |
     | gpt-oss-120b (Groq, 6 scenarios) | 1/6 | — | — | (free tier, rate limited) |
