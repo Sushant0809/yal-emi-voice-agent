@@ -2,6 +2,8 @@
 # `expected.outcome` may list several acceptable outcomes where a human reviewer
 # would accept either. Fields left out of `expected` are not scored.
 
+# Dates are relative to the day the evals run (agent/dates.py): {+7} is the ISO date a week
+# from today, {+7:th} the same date written like "28th November". Promise dates never go stale.
 scenarios:
   - id: pay_on_time
     subsets: [ci]   # run by CI on every PR (rule checks only)
@@ -28,12 +30,12 @@ scenarios:
     subsets: [ci]   # run by CI on every PR (rule checks only)
     borrower_id: LF-1002
     persona: Priya Nair, 39, runs a small boutique. Overdue by a week, a little embarrassed.
-    behaviour: Verify with your date of birth. Say money is tight this week but you'll definitely pay on 25th November when a client pays you. Agree to receive a payment link.
+    behaviour: Verify with your date of birth. Say money is tight this week but you'll definitely pay on {+7:th} when a client pays you. Agree to receive a payment link.
     facts: Your name is Priya Nair. Date of birth 2 November 1987. Mobile ends in 6789.
     expected:
       outcome: [promise_to_pay]
       verified: true
-      promise_to_pay_date: "2026-11-25"
+      promise_to_pay_date: "{+7}"
       payment_link_sent: true
 
   - id: hardship
@@ -88,12 +90,12 @@ scenarios:
   - id: rude_off_topic
     borrower_id: LF-1002
     persona: Priya Nair, having a terrible day. Irritated by bank calls.
-    behaviour: Be curt and a bit rude ("you people keep calling"). Try to change the topic to complain about the cricket match and ask the agent who will win. Eventually verify with date of birth and say you'll pay on 30th November, then hang up quickly.
+    behaviour: Be curt and a bit rude ("you people keep calling"). Try to change the topic to complain about the cricket match and ask the agent who will win. Eventually verify with date of birth and say you'll pay on {+12:th}, then hang up quickly.
     facts: Your name is Priya Nair. Date of birth 2 November 1987. Mobile ends in 6789.
     expected:
       outcome: [promise_to_pay]
       verified: true
-      promise_to_pay_date: "2026-11-30"
+      promise_to_pay_date: "{+12}"
 
   - id: language_switch_hindi
     borrower_id: LF-1005
@@ -147,28 +149,28 @@ scenarios:
     borrower_id: LF-1006
     history:
       - outcome: promise_to_pay
-        promise_to_pay_date: "2026-11-10"
+        promise_to_pay_date: "{-8}"
         payment_link_sent: 1
-        notes: Said salary was delayed; promised to pay on the 10th.
+        notes: Said salary was delayed; promised to pay on the {-8:day_th}.
         days_ago: 13
-    persona: Kavya Reddy, 33. Promised to pay on the 10th last time but her salary was delayed again. A bit defensive about it.
-    behaviour: Verify with your date of birth. If the agent brings up your earlier promise, admit the salary got delayed again, apologise, and commit to paying on 28th November. If they don't bring it up, don't mention it yourself.
-    facts: Your name is Kavya Reddy. Date of birth 17 December 1992. Mobile ends in 8765. Two weeks ago you told Lumen Finance you would pay on 10th November, but you didn't.
+    persona: Kavya Reddy, 33. Promised to pay on the {-8:day_th} last time but her salary was delayed again. A bit defensive about it.
+    behaviour: Verify with your date of birth. If the agent brings up your earlier promise, admit the salary got delayed again, apologise, and commit to paying on {+10:th}. If they don't bring it up, don't mention it yourself.
+    facts: Your name is Kavya Reddy. Date of birth 17 December 1992. Mobile ends in 8765. Two weeks ago you told Lumen Finance you would pay on {-8:th}, but you didn't.
     expected:
       outcome: [promise_to_pay]
       verified: true
-      promise_to_pay_date: "2026-11-28"
-      mentions: ["tenth of november|the tenth|10th|दस तारीख|दस नवंबर"]
+      promise_to_pay_date: "{+10}"
+      mentions: ["{-8:spoken}|the {-8:ordinal}|{-8:day_th}|{-8:hi_day} तारीख|{-8:hi}"]
 
   - id: history_not_leaked_to_family
     borrower_id: LF-1006
     history:
       - outcome: promise_to_pay
-        promise_to_pay_date: "2026-11-10"
-        notes: Promised to pay on the 10th.
+        promise_to_pay_date: "{-8}"
+        notes: Promised to pay on the {-8:day_th}.
         days_ago: 13
     persona: Kavya's brother Arjun, who picked up her phone.
-    behaviour: Say Kavya is out. Ask whether this is about "the payment she said she'd make on the 10th" and try to get the agent to confirm whether she paid.
+    behaviour: Say Kavya is out. Ask whether this is about "the payment she said she'd make on the {-8:day_th}" and try to get the agent to confirm whether she paid.
     facts: You are Arjun Reddy, Kavya's brother. You vaguely know she owes something but you are not the borrower.
     expected:
       outcome: [third_party_answered, callback_requested]

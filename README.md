@@ -14,7 +14,7 @@ uv run python -m agent.bot    # open http://localhost:7860 and click Connect
 
 Calls are only placed between 8am and 7pm IST (`CALLING_HOURS`); outside that window Asha says it's outside calling hours and she'll call back tomorrow, then hangs up, and the log says why. Set `ENFORCE_CALLING_HOURS=false` to test in the evening.
 
-Pick who Asha calls at **http://localhost:7860/borrowers?token=…** (the token is `ADMIN_TOKEN` in `.env`, or a random one printed in the log at start-up): it shows each borrower's verification details and past calls, can clear their history, and links to the call page (no restart needed). The selection is stored as `DEFAULT_BORROWER_ID` in `.env`. Every call is recorded to `outcomes/recordings/<call_id>.wav` (stereo: caller left, Asha right) and transcribed to `outcomes/transcripts/<call_id>.txt`. Every call's outcome is saved to the call-history database (`outcomes/history.db`), and per-turn latency goes to `outcomes/latency.jsonl`. To demo cross-call memory, run `uv run python -m agent.history seed`, then call `LF-1006`, who broke a promise to pay on the 10th.
+Pick who Asha calls at **http://localhost:7860/borrowers?token=…** (the token is `ADMIN_TOKEN` in `.env`, or a random one printed in the log at start-up): it shows each borrower's verification details and past calls, can clear their history, and links to the call page (no restart needed). The selection is stored as `DEFAULT_BORROWER_ID` in `.env`. Every call is recorded to `outcomes/recordings/<call_id>.wav` (stereo: caller left, Asha right) and transcribed to `outcomes/transcripts/<call_id>.txt`. Every call's outcome is saved to the call-history database (`outcomes/history.db`), and per-turn latency goes to `outcomes/latency.jsonl`. To demo cross-call memory, run `uv run python -m agent.history seed`, then call `LF-1006`, who broke a promise to pay eight days ago.
 
 ```bash
 uv run pytest                                   # unit tests: formatter, verification, guardrails
@@ -294,6 +294,7 @@ agent/      bot.py (Pipecat pipeline), prompts.py (goals-based prompt), tools.py
             web.py (borrower picker), use_borrower.py
 config/     lenders/<lender>/{lender,en,hi}.yaml: names and every fixed phrase, per language
 data/       borrowers.json (8 mock borrowers), payments.json (mock payment records),
+            all dates relative to today (agent/dates.py), so the data never goes stale,
             call_history_seed.json (demo history)
 evals/      scenarios.yaml, simulator.py, text_agent.py (Claude + OpenAI-compatible hosts),
             metrics.py, run_evals.py, latency_report.py, bench_llm.py,

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from agent.borrowers import get_borrower
 from agent.templates import greeting, reminder
@@ -18,8 +18,7 @@ def test_recorded_calls_say_so_before_asking_anything():
     assert "Lumen Finance" in greeting(get_borrower("LF-1003")) and "अमित" not in greeting(get_borrower("LF-1003"))
 
 
-def test_reminder_due_and_overdue(monkeypatch):
-    monkeypatch.setattr("agent.borrowers._today", lambda: date(2026, 11, 18))
+def test_reminder_due_and_overdue():
     ok = {"verified": True}
     assert reminder(get_borrower("LF-1001"), ok, "en") == (
         "Thanks, Rahul, you're verified. Your personal loan EMI of twelve thousand five hundred rupees "
@@ -30,18 +29,20 @@ def test_reminder_due_and_overdue(monkeypatch):
     assert "eight days overdue" in over
 
 
-def test_days_overdue_follows_the_calendar(monkeypatch):
-    priya = get_borrower("LF-1002")  # due 10 Nov, 4850 unpaid
-    for today, words in ((date(2026, 11, 11), "one day overdue"), (date(2026, 11, 21), "eleven days overdue")):
-        monkeypatch.setattr("agent.borrowers._today", lambda today=today: today)
-        assert priya.days_overdue == (today - date(2026, 11, 10)).days
-        assert words in reminder(priya, {"verified": True}, "en")
-        assert priya.loan_details()["days_overdue"] == priya.days_overdue  # what the LLM sees agrees
+def test_due_dates_move_with_today_so_the_data_never_goes_stale(monkeypatch):
+    from agent import dates
+
+    priya, rahul = get_borrower("LF-1002"), get_borrower("LF-1001")  # 8 days overdue; due in 17 days
+    for today in (date(2026, 11, 18), date(2027, 3, 1)):
+        monkeypatch.setattr(dates, "today", lambda today=today: today)
+        assert date.fromisoformat(priya.due_date) == today - timedelta(days=8)
+        assert priya.days_overdue == 8 and "eight days overdue" in reminder(priya, {"verified": True}, "en")
+        assert priya.loan_details()["due_date"] == priya.due_date  # what the LLM sees agrees
+        assert date.fromisoformat(rahul.due_date) - today == timedelta(days=17) and not rahul.is_overdue
 
 
-def test_past_due_date_without_unpaid_amount_is_not_overdue(monkeypatch):
-    monkeypatch.setattr("agent.borrowers._today", lambda: date(2026, 11, 21))
-    ananya = get_borrower("LF-1008")  # due 20 Nov, already paid (processing)
+def test_upcoming_emi_with_nothing_unpaid_is_not_overdue():
+    ananya = get_borrower("LF-1008")  # due in 2 days, already paid (processing)
     assert not ananya.is_overdue and ananya.days_overdue == 0
 
 

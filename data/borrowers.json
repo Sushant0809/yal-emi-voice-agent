@@ -7,7 +7,7 @@
     "phone_last4": "2345",
     "loan_type": "Personal Loan",
     "emi_amount": 12500,
-    "due_date": "2026-12-05",
+    "due_in_days": 17,
     "overdue_amount": 0,
     "preferred_language": "en"
   },
@@ -19,7 +19,7 @@
     "phone_last4": "6789",
     "loan_type": "Two-Wheeler Loan",
     "emi_amount": 4850,
-    "due_date": "2026-11-10",
+    "due_in_days": -8,
     "overdue_amount": 4850,
     "preferred_language": "en"
   },
@@ -31,7 +31,7 @@
     "phone_last4": "4680",
     "loan_type": "Home Loan",
     "emi_amount": 38200,
-    "due_date": "2026-12-01",
+    "due_in_days": 13,
     "overdue_amount": 0,
     "preferred_language": "hi"
   },
@@ -43,7 +43,7 @@
     "phone_last4": "3579",
     "loan_type": "Consumer Durable Loan",
     "emi_amount": 2999,
-    "due_date": "2026-10-25",
+    "due_in_days": -24,
     "overdue_amount": 5998,
     "preferred_language": "en"
   },
@@ -55,7 +55,7 @@
     "phone_last4": "1223",
     "loan_type": "Business Loan",
     "emi_amount": 64000,
-    "due_date": "2026-11-28",
+    "due_in_days": 10,
     "overdue_amount": 0,
     "preferred_language": "hi"
   },
@@ -67,7 +67,7 @@
     "phone_last4": "8765",
     "loan_type": "Personal Loan",
     "emi_amount": 9375,
-    "due_date": "2026-11-05",
+    "due_in_days": -13,
     "overdue_amount": 9375,
     "preferred_language": "en"
   },
@@ -79,7 +79,7 @@
     "phone_last4": "5612",
     "loan_type": "Tractor Loan",
     "emi_amount": 21750,
-    "due_date": "2026-12-10",
+    "due_in_days": 22,
     "overdue_amount": 0,
     "preferred_language": "hi"
   },
@@ -91,7 +91,7 @@
     "phone_last4": "0011",
     "loan_type": "Education Loan",
     "emi_amount": 7200,
-    "due_date": "2026-11-20",
+    "due_in_days": 2,
     "overdue_amount": 0,
     "preferred_language": "en"
   }

@@ -23,6 +23,7 @@ import yaml
 from agent.borrowers import get_borrower
 from agent.call_state import Outcome
 from agent.config import ROOT
+from agent.dates import resolve
 from agent.history import record_call
 from agent.prompts import prompt_version
 from evals.metrics import judge, rule_checks
@@ -31,6 +32,11 @@ from evals.text_agent import PROVIDERS, OpenAICompatTextAgent, TextAgent
 
 MAX_TURNS = 14
 SCENARIOS_PATH = ROOT / "evals" / "scenarios.yaml"
+
+
+def load_scenarios() -> list[dict]:
+    """Scenarios with their date tokens ("{+7}", "{-8:th}") filled in for today."""
+    return resolve(yaml.safe_load(SCENARIOS_PATH.read_text())["scenarios"])
 
 
 def seed_history(scenario: dict, db_path: Path) -> None:
@@ -197,7 +203,7 @@ async def main():
                              "loan details before verification or has a judge-flagged guardrail violation")
     args = parser.parse_args()
 
-    scenarios = yaml.safe_load(SCENARIOS_PATH.read_text())["scenarios"]
+    scenarios = load_scenarios()
     if args.scenario:
         scenarios = [s for s in scenarios if s["id"] in args.scenario]
     if args.subset:

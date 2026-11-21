@@ -12,12 +12,12 @@ import random
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from loguru import logger
 
-from agent import audit
+from agent import audit, dates
 from agent.borrowers import check_identity
 from agent.call_state import MAX_VERIFICATION_ATTEMPTS, CallState, Outcome
 from agent.config import CONFIG, ROOT
@@ -125,11 +125,12 @@ async def _send_payment_link(state: CallState, args: dict) -> dict:
 async def _check_payment_status(state: CallState, args: dict) -> dict:
     await asyncio.sleep(CONFIG.payment_check_delay_secs)  # mock lookup latency
     payments = json.loads(PAYMENTS_PATH.read_text()).get(state.borrower.borrower_id, [])[:3]
+    paid_on = [dates.today() - timedelta(days=p["days_ago"]) for p in payments]  # mock dates are relative
     return {
         "recent_payments": [
-            {"date": p["date"], "date_spoken": date_to_words(date.fromisoformat(p["date"])),
+            {"date": d.isoformat(), "date_spoken": date_to_words(d),
              "amount_spoken": rupees_to_words(p["amount"]), "status": p["status"]}
-            for p in payments
+            for p, d in zip(payments, paid_on, strict=True)
         ],
         "note": "Payments can take two to three working days to show. Never argue with the caller about this.",
     }

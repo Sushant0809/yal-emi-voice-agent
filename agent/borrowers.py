@@ -3,9 +3,10 @@
 import json
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from functools import cache
 
+from agent import dates
 from agent.config import CONFIG
 
 
@@ -18,7 +19,7 @@ class Borrower:
     phone_last4: str
     loan_type: str
     emi_amount: int
-    due_date: str
+    due_in_days: int  # days from today to the EMI's due date; negative = already past (agent/dates.py)
     overdue_amount: int  # unpaid amount past its due date; 0 when the borrower is up to date
     preferred_language: str
 
@@ -31,12 +32,15 @@ class Borrower:
         return self.overdue_amount > 0
 
     @property
+    def due_date(self) -> str:
+        """ISO due date, relative to today, so the mock data never goes stale."""
+        return (dates.today() + timedelta(days=self.due_in_days)).isoformat()
+
+    @property
     def days_overdue(self) -> int:
-        """Days since the due date, counted from today. It used to be a fixed number in the data,
-        which drifted: on 21 Nov the agent still said "eight days overdue" for a 10 Nov due date."""
-        if not self.is_overdue:
-            return 0
-        return max(0, (_today() - date.fromisoformat(self.due_date)).days)
+        """Days since the due date. Derived, never stored: a stored count drifted (on 21 Nov the
+        agent still said "eight days overdue" for a 10 Nov due date)."""
+        return max(0, -self.due_in_days) if self.is_overdue else 0
 
     def loan_details(self) -> dict:
         """Details the agent may speak only after verification."""
@@ -47,11 +51,6 @@ class Borrower:
             "days_overdue": self.days_overdue,
             "overdue_amount_inr": self.overdue_amount,
         }
-
-
-def _today() -> date:
-    """Today's date (a function, so tests can pin it)."""
-    return date.today()
 
 
 @cache

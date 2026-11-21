@@ -154,7 +154,11 @@ def _parse_date(value: str | None) -> date | None:
 
 
 def seed(path: Path = ROOT / "data" / "call_history_seed.json", db_path: Path | None = None) -> int:
-    rows = json.loads(path.read_text())
+    from agent.dates import (
+        resolve,  # the seed's dates are relative to today ("{-15}T11:20:00")
+    )
+
+    rows = resolve(json.loads(path.read_text()))
     for row in rows:
         record_call(row, db_path)
     return len(rows)
