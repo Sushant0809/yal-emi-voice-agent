@@ -1,3 +1,5 @@
+from datetime import date
+
 from agent.borrowers import get_borrower
 from agent.templates import greeting, reminder
 
@@ -16,7 +18,8 @@ def test_recorded_calls_say_so_before_asking_anything():
     assert "Lumen Finance" in greeting(get_borrower("LF-1003")) and "अमित" not in greeting(get_borrower("LF-1003"))
 
 
-def test_reminder_due_and_overdue():
+def test_reminder_due_and_overdue(monkeypatch):
+    monkeypatch.setattr("agent.borrowers._today", lambda: date(2026, 11, 18))
     ok = {"verified": True}
     assert reminder(get_borrower("LF-1001"), ok, "en") == (
         "Thanks, Rahul, you're verified. Your personal loan EMI of twelve thousand five hundred rupees "
@@ -25,6 +28,21 @@ def test_reminder_due_and_overdue():
     over = reminder(get_borrower("LF-1002"), ok, "en")
     assert "four thousand eight hundred fifty rupees was due on the tenth of November" in over
     assert "eight days overdue" in over
+
+
+def test_days_overdue_follows_the_calendar(monkeypatch):
+    priya = get_borrower("LF-1002")  # due 10 Nov, 4850 unpaid
+    for today, words in ((date(2026, 11, 11), "one day overdue"), (date(2026, 11, 21), "eleven days overdue")):
+        monkeypatch.setattr("agent.borrowers._today", lambda today=today: today)
+        assert priya.days_overdue == (today - date(2026, 11, 10)).days
+        assert words in reminder(priya, {"verified": True}, "en")
+        assert priya.loan_details()["days_overdue"] == priya.days_overdue  # what the LLM sees agrees
+
+
+def test_past_due_date_without_unpaid_amount_is_not_overdue(monkeypatch):
+    monkeypatch.setattr("agent.borrowers._today", lambda: date(2026, 11, 21))
+    ananya = get_borrower("LF-1008")  # due 20 Nov, already paid (processing)
+    assert not ananya.is_overdue and ananya.days_overdue == 0
 
 
 def test_llm_writes_it_when_judgement_is_needed():

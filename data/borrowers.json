@@ -8,7 +8,6 @@
     "loan_type": "Personal Loan",
     "emi_amount": 12500,
     "due_date": "2026-12-05",
-    "days_overdue": 0,
     "overdue_amount": 0,
     "preferred_language": "en"
   },
@@ -21,7 +20,6 @@
     "loan_type": "Two-Wheeler Loan",
     "emi_amount": 4850,
     "due_date": "2026-11-10",
-    "days_overdue": 8,
     "overdue_amount": 4850,
     "preferred_language": "en"
   },
@@ -34,7 +32,6 @@
     "loan_type": "Home Loan",
     "emi_amount": 38200,
     "due_date": "2026-12-01",
-    "days_overdue": 0,
     "overdue_amount": 0,
     "preferred_language": "hi"
   },
@@ -47,7 +44,6 @@
     "loan_type": "Consumer Durable Loan",
     "emi_amount": 2999,
     "due_date": "2026-10-25",
-    "days_overdue": 24,
     "overdue_amount": 5998,
     "preferred_language": "en"
   },
@@ -60,7 +56,6 @@
     "loan_type": "Business Loan",
     "emi_amount": 64000,
     "due_date": "2026-11-28",
-    "days_overdue": 0,
     "overdue_amount": 0,
     "preferred_language": "hi"
   },
@@ -73,7 +68,6 @@
     "loan_type": "Personal Loan",
     "emi_amount": 9375,
     "due_date": "2026-11-05",
-    "days_overdue": 13,
     "overdue_amount": 9375,
     "preferred_language": "en"
   },
@@ -86,7 +80,6 @@
     "loan_type": "Tractor Loan",
     "emi_amount": 21750,
     "due_date": "2026-12-10",
-    "days_overdue": 0,
     "overdue_amount": 0,
     "preferred_language": "hi"
   },
@@ -99,7 +92,6 @@
     "loan_type": "Education Loan",
     "emi_amount": 7200,
     "due_date": "2026-11-20",
-    "days_overdue": 0,
     "overdue_amount": 0,
     "preferred_language": "en"
   }

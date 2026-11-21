@@ -19,8 +19,7 @@ class Borrower:
     loan_type: str
     emi_amount: int
     due_date: str
-    days_overdue: int
-    overdue_amount: int
+    overdue_amount: int  # unpaid amount past its due date; 0 when the borrower is up to date
     preferred_language: str
 
     @property
@@ -29,7 +28,15 @@ class Borrower:
 
     @property
     def is_overdue(self) -> bool:
-        return self.days_overdue > 0
+        return self.overdue_amount > 0
+
+    @property
+    def days_overdue(self) -> int:
+        """Days since the due date, counted from today. It used to be a fixed number in the data,
+        which drifted: on 21 Nov the agent still said "eight days overdue" for a 10 Nov due date."""
+        if not self.is_overdue:
+            return 0
+        return max(0, (_today() - date.fromisoformat(self.due_date)).days)
 
     def loan_details(self) -> dict:
         """Details the agent may speak only after verification."""
@@ -40,6 +47,11 @@ class Borrower:
             "days_overdue": self.days_overdue,
             "overdue_amount_inr": self.overdue_amount,
         }
+
+
+def _today() -> date:
+    """Today's date (a function, so tests can pin it)."""
+    return date.today()
 
 
 @cache
