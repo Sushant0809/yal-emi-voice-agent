@@ -7,6 +7,7 @@
 import re
 import sys
 
+from agent import audit
 from agent.borrowers import load_borrowers
 from agent.config import ROOT
 
@@ -27,6 +28,7 @@ def set_borrower(bid: str) -> None:
 def main() -> None:
     borrowers = load_borrowers()
     if len(sys.argv) < 2:
+        audit.record(audit.cli_actor(), "view_borrowers", count=len(borrowers))  # prints DOBs
         for b in borrowers.values():
             status = f"{b.days_overdue} days overdue" if b.is_overdue else f"due {b.due_date}"
             print(f"{b.borrower_id}  {b.name:16s} {b.loan_type:22s} {b.preferred_language}  "
@@ -35,6 +37,7 @@ def main() -> None:
     bid = sys.argv[1].upper()
     if bid not in borrowers:
         sys.exit(f"Unknown borrower {bid}. Options: {', '.join(borrowers)}")
+    audit.record(audit.cli_actor(), "select_borrower", bid)
     set_borrower(bid)
     b = borrowers[bid]
     print(f"Next call -> {b.name} ({bid}). Verify with DOB {b.dob} or mobile ...{b.phone_last4}.")

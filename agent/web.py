@@ -2,22 +2,48 @@
 
 Pick who Asha calls, see their test verification details and past calls, clear
 their history, then open the Pipecat Playground to start the call.
+
+The page shows verification secrets (DOB, mobile digits), so it and its API need a token:
+ADMIN_TOKEN from .env, or a random one printed at start-up. Open /borrowers?token=<token>.
 """
 
+import html
 import json
+import secrets
 from datetime import date
 
-from fastapi import HTTPException
+from fastapi import Depends, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
+from loguru import logger
 from pipecat.runner.run import app
 from pydantic import BaseModel
 
+from agent import audit
 from agent.borrowers import load_borrowers
 from agent.config import CONFIG
-from agent.history import connect, recent_calls
+from agent.history import clear_borrower, connect, recent_calls
 from agent.phrases import lender
 from agent.speech import date_to_words, rupees_to_words
 from agent.use_borrower import ENV, set_borrower
+
+ADMIN_TOKEN = CONFIG.admin_token or secrets.token_urlsafe(16)
+if not CONFIG.admin_token and not CONFIG.admin_tokens:
+    logger.info(f"Borrower picker: http://localhost:7860/borrowers?token={ADMIN_TOKEN}")
+
+
+def _tokens() -> dict[str, str]:
+    """token -> who holds it. ADMIN_TOKENS names each person; the single ADMIN_TOKEN is "admin"."""
+    named = dict(reversed(pair.split(":", 1)) for pair in CONFIG.admin_tokens.split(",") if ":" in pair)
+    return {**({ADMIN_TOKEN: "admin"} if CONFIG.admin_token or not named else {}), **named}
+
+
+def require_token(x_admin_token: str | None = Header(None), token: str | None = Query(None)) -> str:
+    """The caller's name, for the audit log. 401 without a valid token."""
+    given = (x_admin_token or token or "").encode()
+    for known, who in _tokens().items():
+        if secrets.compare_digest(given, known.encode()):
+            return f"web:{who}"
+    raise HTTPException(401, "Missing or wrong admin token. Open /borrowers?token=<ADMIN_TOKEN>.")
 
 
 class Selection(BaseModel):
@@ -25,6 +51,8 @@ class Selection(BaseModel):
 
 
 def _current() -> str:
+    if not ENV.exists():  # e.g. in CI, or before .env is created
+        return CONFIG.default_borrower_id
     for line in ENV.read_text().splitlines():
         if line.startswith("DEFAULT_BORROWER_ID="):
             return line.split("=", 1)[1].strip()
@@ -53,29 +81,48 @@ def _borrower_rows() -> list[dict]:
     return rows
 
 
+# Every endpoint is audited: the page shows every borrower's DOB and mobile digits. The audit
+# entry is written before the data is returned or changed, so a failed write blocks the request.
+
+
 @app.get("/api/borrowers")
-async def list_borrowers():
+async def list_borrowers(actor: str = Depends(require_token)):
+    audit.record(actor, "view_borrowers", count=len(load_borrowers()))
     return {"current": _current(), "borrowers": _borrower_rows()}
 
 
 @app.post("/api/borrower")
-async def select_borrower(sel: Selection):
+async def select_borrower(sel: Selection, actor: str = Depends(require_token)):
     if sel.borrower_id not in load_borrowers():
         raise HTTPException(404, "Unknown borrower")
+    audit.record(actor, "select_borrower", sel.borrower_id)
     set_borrower(sel.borrower_id)
     return {"current": sel.borrower_id}
 
 
 @app.post("/api/borrower/{borrower_id}/clear-history")
-async def clear_history(borrower_id: str):
+async def clear_history(borrower_id: str, actor: str = Depends(require_token)):
+    if borrower_id not in load_borrowers():
+        raise HTTPException(404, "Unknown borrower")
+    audit.record(actor, "clear_history", borrower_id)
     with connect() as conn:
-        n = conn.execute("DELETE FROM call_history WHERE borrower_id = ?", (borrower_id,)).rowcount
+        n = clear_borrower(conn, borrower_id)  # its failed identity checks too, which unlocks it
     return {"cleared": n}
 
 
+def _script_json(value) -> str:
+    """JSON safe to embed in a <script>: "</script>" in a name or note can't end the block."""
+    return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
 @app.get("/borrowers", response_class=HTMLResponse)
-async def borrowers_page():
-    page = PAGE.replace("__DATA__", json.dumps(await list_borrowers())).replace("__LENDER__", lender().name)
+async def borrowers_page(actor: str = Depends(require_token), x_admin_token: str | None = Header(None),
+                         token: str | None = Query(None)):
+    audit.record(actor, "view_borrowers", count=len(load_borrowers()))
+    data = {"current": _current(), "borrowers": _borrower_rows()}
+    # The page's API calls reuse the token it was opened with, so they're audited as the same person.
+    page = (PAGE.replace("__DATA__", _script_json(data)).replace("__TOKEN__", _script_json(x_admin_token or token))
+            .replace("__LENDER__", html.escape(lender().name)))
     return HTMLResponse(page)
 
 
@@ -119,26 +166,30 @@ button.danger{color:var(--warn)}#msg{font-size:13px;color:var(--accent);min-heig
 </main>
 <script>
 let data = __DATA__;
+const TOKEN = __TOKEN__;
 const $ = id => document.getElementById(id);
+// Every value from the server is escaped before it goes into innerHTML.
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const api = (path, opts = {}) => fetch(path, {...opts, headers: {...(opts.headers || {}), "X-Admin-Token": TOKEN}});
 function render(){
   const b = data.borrowers.find(x => x.id === data.current) || data.borrowers[0];
   $("sel").innerHTML = data.borrowers.map(x =>
-    `<option value="${x.id}" ${x.id===b.id?"selected":""}>${x.name} · ${x.id} · ${x.language}</option>`).join("");
-  $("facts").innerHTML = `<dt>Loan</dt><dd>${b.loan}</dd><dt>Amount</dt><dd>${b.amount}</dd>
-    <dt>Status</dt><dd>${b.status}</dd><dt>Language</dt><dd>${b.language}</dd>`;
-  $("verify").innerHTML = `To verify, say DOB <b>${b.dob}</b> or mobile ending <b>${b.last4}</b>`;
+    `<option value="${esc(x.id)}" ${x.id===b.id?"selected":""}>${esc(x.name)} · ${esc(x.id)} · ${esc(x.language)}</option>`).join("");
+  $("facts").innerHTML = `<dt>Loan</dt><dd>${esc(b.loan)}</dd><dt>Amount</dt><dd>${esc(b.amount)}</dd>
+    <dt>Status</dt><dd>${esc(b.status)}</dd><dt>Language</dt><dd>${esc(b.language)}</dd>`;
+  $("verify").innerHTML = `To verify, say DOB <b>${esc(b.dob)}</b> or mobile ending <b>${esc(b.last4)}</b>`;
   $("hist").innerHTML = b.history.length
-    ? b.history.map(h => `<li>${h.when} · <b>${h.outcome}</b>${h.ptp ? " · promised " + h.ptp : ""}</li>`).join("")
+    ? b.history.map(h => `<li>${esc(h.when)} · <b>${esc(h.outcome)}</b>${h.ptp ? " · promised " + esc(h.ptp) : ""}</li>`).join("")
     : `<li class="muted">No previous calls. Asha starts fresh.</li>`;
 }
-async function refresh(){ data = await (await fetch("/api/borrowers")).json(); render(); }
+async function refresh(){ data = await (await api("/api/borrowers")).json(); render(); }
 $("sel").onchange = async e => {
-  await fetch("/api/borrower", {method:"POST", headers:{"Content-Type":"application/json"},
+  await api("/api/borrower", {method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({borrower_id: e.target.value})});
   await refresh(); $("msg").textContent = "Saved. The next call goes to this borrower.";
 };
 $("clear").onclick = async () => {
-  const r = await (await fetch(`/api/borrower/${data.current}/clear-history`, {method:"POST"})).json();
+  const r = await (await api(`/api/borrower/${encodeURIComponent(data.current)}/clear-history`, {method:"POST"})).json();
   await refresh(); $("msg").textContent = `Cleared ${r.cleared} previous call(s).`;
 };
 render();

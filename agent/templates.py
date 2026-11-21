@@ -16,6 +16,7 @@ Both the live bot and the eval agent use these, so the evals test the same behav
 from datetime import date
 
 from agent.borrowers import Borrower
+from agent.config import CONFIG
 from agent.phrases import lender
 from agent.speech import verbaliser
 
@@ -26,9 +27,12 @@ CALL_CONNECTED_NOTE = (
 )
 
 
-def greeting(borrower: Borrower) -> str:
-    return lender().phrase(borrower.preferred_language, "greeting",
-                           name=borrower.name, first_name=borrower.first_name)
+def greeting(borrower: Borrower, recorded: bool | None = None) -> str:
+    """The opening line. When the call is recorded it says so, before anything else is asked."""
+    L, lang = lender(), borrower.preferred_language
+    recorded = CONFIG.record_calls if recorded is None else recorded
+    notice = " " + L.phrase(lang, "recording_notice") if recorded else ""
+    return L.phrase(lang, "greeting", name=borrower.name, first_name=borrower.first_name, recording_notice=notice)
 
 
 def reminder(borrower: Borrower, verify_result: dict, language: str) -> str | None:

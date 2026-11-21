@@ -5,12 +5,13 @@ decides what it is *allowed* to know (loan details only after verification) and
 what gets recorded.
 """
 
+import asyncio
 import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from agent.borrowers import Borrower
 from agent.config import CONFIG
@@ -53,6 +54,7 @@ class OutcomeRecord(BaseModel):
     duration_secs: float = 0.0
     turns: int = 0
     connection_incidents: int = 0  # provider drop-outs the agent recovered from
+    prompt_version: str = ""  # agent/prompts.py PROMPT_VERSION: which wording produced this call
 
 
 class CallState(BaseModel):
@@ -60,7 +62,9 @@ class CallState(BaseModel):
     call_id: str = Field(default_factory=lambda: datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f"))
     verified: bool = False
     verification_attempts: int = 0
+    locked_out: bool = False  # too many failed checks across calls (see history.failed_verifications)
     payment_link_sent: bool = False
+    payment_link_id: str | None = None
     language: str = "en"
     turns: int = 0
     idle_prompts: int = 0
@@ -70,10 +74,18 @@ class CallState(BaseModel):
     outcome: OutcomeRecord | None = None
     # Where cross-call memory lives. Evals point this at a throwaway database per run.
     history_db: Path = CONFIG.history_db
+    # Where the agent's own data access is audited (None = the real log). Evals use a throwaway one.
+    audit_path: Path | None = None
     # Fault injection for evals: tool name -> how many of its next calls should fail.
     inject_failures: dict[str, int] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
+    # Serialises send_payment_link, so two tool calls in one turn can't send two links.
+    _link_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+
+    @property
+    def link_lock(self) -> asyncio.Lock:
+        return self._link_lock
 
     def record_incident(self) -> None:
         self.connection_incidents += 1
@@ -84,7 +96,7 @@ class CallState(BaseModel):
 
     @property
     def verification_locked(self) -> bool:
-        return not self.verified and self.verification_attempts >= MAX_VERIFICATION_ATTEMPTS
+        return not self.verified and (self.locked_out or self.verification_attempts >= MAX_VERIFICATION_ATTEMPTS)
 
     def finalize(
         self,
@@ -98,6 +110,8 @@ class CallState(BaseModel):
         """Record the outcome once; later calls return the first record unchanged."""
         if self.outcome:
             return self.outcome
+        from agent.prompts import prompt_version  # lazy: prompts -> tools -> call_state
+
         self.outcome = OutcomeRecord(
             borrower_id=self.borrower.borrower_id,
             verified=self.verified,
@@ -113,6 +127,7 @@ class CallState(BaseModel):
             duration_secs=round(time.monotonic() - self.started_monotonic, 2),
             turns=self.turns,
             connection_incidents=self.connection_incidents,
+            prompt_version=prompt_version(),
         )
         return self.outcome
 

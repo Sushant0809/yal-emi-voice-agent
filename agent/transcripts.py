@@ -65,6 +65,9 @@ def save(call_id: str, messages: list, outcome: dict | None) -> Path:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
+        from agent import audit
+
+        audit.record(audit.cli_actor(), "view_transcript", call_id=sys.argv[1])
         print((TRANSCRIPTS_DIR / f"{sys.argv[1]}.txt").read_text())
     else:
         for p in sorted(TRANSCRIPTS_DIR.glob("*.txt")):

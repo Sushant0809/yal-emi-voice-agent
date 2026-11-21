@@ -2,7 +2,7 @@
 
 An outbound voice agent that reminds borrowers about upcoming or overdue EMIs. It verifies who it's talking to, states the amount clearly, finds out what the borrower intends to do, offers a payment link, and records a structured outcome. It's built on [Pipecat](https://github.com/pipecat-ai/pipecat) and runs in the browser on a laptop.
 
-> Status: working end to end. Full eval suite (19 scenarios × 2) passes 38/38 with 0 guardrail violations, and the payment-link failure scenario passes 3/3; median voice-to-voice latency 2.25s on live calls (see the layer-by-layer table).
+> Status: working end to end. Full eval suite (19 scenarios × 2) passes 38/38 with 0 guardrail violations, and the payment-link failure scenario passes 3/3; median voice-to-voice latency 2.25s on live calls, p95 4.72s (see the layer-by-layer table).
 
 ## Quick start
 
@@ -12,14 +12,18 @@ cp .env.example .env          # add ANTHROPIC / DEEPGRAM / CARTESIA keys and a C
 uv run python -m agent.bot    # open http://localhost:7860 and click Connect
 ```
 
-Pick who Asha calls at **http://localhost:7860/borrowers**: it shows each borrower's verification details and past calls, can clear their history, and links to the call page (no restart needed). The selection is stored as `DEFAULT_BORROWER_ID` in `.env`. Every call is recorded to `outcomes/recordings/<call_id>.wav` (stereo: caller left, Asha right) and transcribed to `outcomes/transcripts/<call_id>.txt`. Every call's outcome is saved to the call-history database (`outcomes/history.db`), and per-turn latency goes to `outcomes/latency.jsonl`. To demo cross-call memory, run `uv run python -m agent.history seed`, then call `LF-1006`, who broke a promise to pay on the 10th.
+Calls are only placed between 8am and 7pm IST (`CALLING_HOURS`); outside that window the bot logs a warning and hangs up without speaking. Set `ENFORCE_CALLING_HOURS=false` to test in the evening.
+
+Pick who Asha calls at **http://localhost:7860/borrowers?token=…** (the token is `ADMIN_TOKEN` in `.env`, or a random one printed in the log at start-up): it shows each borrower's verification details and past calls, can clear their history, and links to the call page (no restart needed). The selection is stored as `DEFAULT_BORROWER_ID` in `.env`. Every call is recorded to `outcomes/recordings/<call_id>.wav` (stereo: caller left, Asha right) and transcribed to `outcomes/transcripts/<call_id>.txt`. Every call's outcome is saved to the call-history database (`outcomes/history.db`), and per-turn latency goes to `outcomes/latency.jsonl`. To demo cross-call memory, run `uv run python -m agent.history seed`, then call `LF-1006`, who broke a promise to pay on the 10th.
 
 ```bash
 uv run pytest                                   # unit tests: formatter, verification, guardrails
 uv run python -m evals.run_evals -n 3           # every scenario x3, rule checks + LLM judge
 uv run python -m evals.run_evals -s hardship -n 5 --no-judge
 uv run python -m evals.run_evals -n 2 --agent-model cerebras:qwen-3.8-27b   # same suite, another model
-uv run python -m evals.latency_report --last 5  # layer-by-layer latency of live calls
+uv run python -m evals.latency_report --last 5  # layer-by-layer latency (p50/p95) and interruption rate
+uv run python -m evals.online                   # score today's real calls; list calls for human review
+uv run python -m evals.wer                      # STT accuracy on digits, dates and amounts (en / hi / Hinglish)
 ```
 
 ## Architecture
@@ -42,13 +46,14 @@ Browser speaker <--WebRTC-- Cartesia Sonic <-- speech formatter <-- Claude (tool
 | No dead air during tools | Each tool can declare a filler line in the phrase pack. `on_function_calls_started` speaks it in the caller's language while the tool runs: "Thanks, one moment" (`verify_identity`), "Let me just check that for you" (`check_payment_status`), "Sure, I'm sending that to you now" (`send_payment_link`). After verification, the reminder is spoken from a template, so no second LLM pass is needed |
 | Silence | `on_user_turn_idle`: "are you still there?" twice, then a graceful goodbye and a `no_response` outcome |
 | Numbers spoken like a person | `agent/speech.py` TTS transform: ₹12,500 becomes "twelve thousand five hundred rupees", 2026-12-05 becomes "the fifth of December". Indian lakh/crore system |
+| Security and compliance | Identity checks take one factor at a time and are logged, so a borrower locks out after 3 failures across calls in 24h (not just 2 per call). Calling hours (8am–7pm IST) enforced in code. One payment link per call, keyed by call id. Promise dates are validated before they are stored. DOBs, phone digits and four-digit groups are masked in every log line (`agent/redact.py`). The borrower page needs a token, and all its data is escaped |
 | Tool failures | `run_tool` never raises. Failures return a message the model apologises around. `PAYMENT_LINK_FAILURE_RATE` injects failures |
 | Background noise | **RNNoise** (open-source, local CPU, ~1.5ms per 20ms frame, about 56 dB reduction on stationary noise in a unit test) cleans caller audio before Silero VAD (confidence ≥ 0.7, volume ≥ 0.6) and Flux see it. Noise that yields no transcript is ignored unless it interrupted Asha. Garbled speech gets "sorry, could you say that again?". `NOISE_FILTER=off` for A/B tests |
 | Provider drop-outs | `agent/recovery.py`, driven by real signals rather than timers. A reply that produced no audio is held, then re-spoken with "Sorry, the line broke up for a second" when Cartesia actually reconnects (`on_connected`). An STT drop makes Asha ask the caller to repeat. It counts as recovered only when the audio plays. If the caller speaks first, the apology is dropped and the LLM answers normally. One apology per outage, in the caller's language. Incidents go to `outcomes/incidents.jsonl` and `connection_incidents` in the outcome |
 
 ## Key design decisions
 
-1. **Verification is enforced in code, not only in the prompt.** The system prompt contains only the borrower's name. Loan details enter the context *only* through a successful `verify_identity` result, so a family member, a wrong number or a prompt-injection attempt has nothing to extract. Verification locks after two failures.
+1. **Verification is enforced in code, not only in the prompt.** The system prompt contains only the borrower's name. Loan details enter the context *only* through a successful `verify_identity` result, so a family member, a wrong number or a prompt-injection attempt has nothing to extract. Verification locks after two failures in a call, and after three across calls in 24 hours (each check is stored in `verification_attempts`), so calling back to guess again doesn't work. `verified` is set only once the whole result has been built.
 2. **Cross-call memory sits behind the same gate.** Past calls are loan information, so `verify_identity` only returns them after verification succeeds (see Memory below).
 3. **Escalation for hardship and disputes is forced in code.** `CallState.finalize` sets `escalate_to_human=True` for those outcomes, whatever the model passes.
 4. **One brain, two bodies.** `agent/tools.py`, `agent/prompts.py` and `agent/call_state.py` don't depend on Pipecat. The live bot (`agent/bot.py`) and the eval agent (`evals/text_agent.py`) share them, so the evals test the same guardrails the caller hits.
@@ -90,6 +95,49 @@ How it flows:
 - **Postgres for durable records:** `call_history`, promises to pay and the escalation queue, keeping the same idempotent insert on `call_id`.
 - **Retention:** keep transcripts briefly and outcomes for longer; never put loan data in the prompt before verification.
 
+## Tracing (Langfuse)
+
+Optional, off unless Langfuse keys are set. Every call becomes one trace, with no code path depending on it:
+
+```bash
+docker compose -f docker-compose.langfuse.yml up -d   # local Langfuse at http://localhost:3000 (admin@lumen.local / lumen-local-admin)
+# .env: LANGFUSE_PUBLIC_KEY=pk-lf-local  LANGFUSE_SECRET_KEY=sk-lf-local  (pre-created by the compose file)
+```
+
+- **Shape:** Pipecat's OpenTelemetry spans (`conversation` → `turn` → STT / LLM / TTS, with time to first byte and token usage) plus a `tool.<name>` span per tool call under its turn, with redacted input and output (ERROR level when the tool failed).
+- **Tags and metadata:** the session id is the call id (the same id as the transcript, recording and outcome record). Tags are `prompt:<version>`, `model:`, `lender:` and `lang:`. `user.id` is a keyed hash of the borrower id, so one borrower's calls group together without the id being in Langfuse. The prompt version is a content hash of the system prompt and every tool description (`agent/prompts.py: prompt_version`), so a regression can be tied to the exact wording that caused it. The outcome, `verified` and `escalate_to_human` are set as trace output and metadata when the call ends.
+- **PII:** every span is copied through `RedactingExporter` before it is serialised. DOBs, phone digits, four-digit groups and borrower names are masked in every attribute, transcripts and LLM messages included. `TRACE_CONTENT=none` drops conversation text entirely and keeps only timings, tags and outcomes. Names written in Devanagari aren't caught yet.
+- **Never breaks a call:** spans are exported on a background thread with a 5s timeout. An unreachable Langfuse only loses spans (a test proves export returns within the timeout, and a broken exporter is contained). Every helper swallows its own errors.
+
+## Consent and data handling
+
+**Consent to record.** When recording is on (`RECORD_CALLS=true`, the default), the greeting says so before anything is asked: "Hello, this is Asha calling from Lumen Finance. This call is recorded for quality and training. Am I speaking with Rahul Sharma?" (the Hindi pack has its own line). The wording lives in the phrase pack (`recording_notice`), so compliance can change it without a code change. Gaps: the notice is information, not an opt-in. A caller who objects isn't handled automatically: the recording can't yet be stopped mid-call, and the objection should be flagged for the team. With templated turns off, the LLM writes the greeting and isn't told to give the notice. Set `RECORD_CALLS=false` to record nothing.
+
+**What is stored, where, and for how long**
+
+| Data | Where | Contains | Kept |
+|---|---|---|---|
+| Call audio | `outcomes/recordings/<call_id>.wav` | Both voices | `RETENTION_DAYS` (30), then deleted |
+| Transcript | `outcomes/transcripts/<call_id>.{txt,json}` | Everything said, including DOB or phone digits, plus tool results (loan details) | `RETENTION_DAYS` (30) |
+| Outcome record | `outcomes/history.db` (`call_history`) | Outcome, promise date, notes, prompt version; no transcript or audio | Until erased: cross-call memory needs it |
+| Identity checks | `history.db` (`verification_attempts`) | Pass/fail per check, never the values given | `RETENTION_DAYS`; only the last 24h matter for lockout |
+| Logs | `outcomes/bot.log` | Redacted since 21 Nov (DOBs, digits, names masked) | Rotated at 20 MB; rotated files deleted after `RETENTION_DAYS` |
+| Latency, usage, turns | `outcomes/*.jsonl` | Timings and token counts only | Not purged (no personal data) |
+| Traces (optional) | Langfuse | Redacted spans; borrower id hashed; `TRACE_CONTENT=none` keeps no text | Langfuse's own retention settings |
+| Audit log | `outcomes/audit.jsonl` | Who, what, which borrower id, when; no PII | Kept (it's the record of deletions too) |
+
+- **Retention.** `uv run python -m agent.retention --dry-run` lists what is past `RETENTION_DAYS`; without `--dry-run` it deletes it. The bot also runs it in the background at the start of every call, so nothing piles up. `RETENTION_DAYS=0` keeps everything.
+- **Erasure (a borrower's deletion request).** `uv run python -m agent.retention erase LF-1001` removes their call history, identity checks, transcripts and recordings, finding calls through both the database and the transcripts. The audit entry is written first: if it can't be written, nothing is deleted.
+- **Audit log.** Every read or change of borrower data is recorded:
+  - the borrower page (each person's own token via `ADMIN_TOKENS=alice:…,bob:…`, so entries name who);
+  - the CLI tools that show DOBs, history or transcripts (`cli:<os user>`);
+  - the agent itself whenever it releases loan details to a verified caller, or locks out a caller after failed checks;
+  - online evals reading transcripts;
+  - every retention or erasure deletion.
+
+  Entries are hash-chained: `uv run python -m agent.audit --verify` detects an edited, removed or reordered entry. `uv run python -m agent.audit --borrower LF-1001` shows everything that touched one borrower.
+- **Who processes call data.** Deepgram (caller audio), Anthropic (the conversation text, and the simulator and judge in evals), and Cartesia (Asha's lines, which contain loan details after verification). A real deployment needs data-processing agreements with each, and Indian data residency where it applies.
+
 ## Evals
 
 Full write-up: [REPORT.md](REPORT.md).
@@ -105,8 +153,39 @@ Full write-up: [REPORT.md](REPORT.md).
 | No disclosure before verification | Scan every agent line said before verification for the loan amount, due date, loan type and past-call details, in digits and in words, English and Hindi | High (may miss paraphrases) |
 | Required mentions (e.g. raising a broken promise) | Pattern match with alternatives | Medium |
 | No meta-narration, raw digits, polite close, single `end_call` | Rule checks on the transcript and tool calls | High |
-| Tone, empathy, naturalness, guardrail violations | LLM judge with a structured rubric | Medium; spot-checked by hand |
+| Tone, empathy, naturalness, guardrail violations | LLM judge with a structured rubric | Medium; spot-checked by hand. `evals/calibrate.py` measures it against human labels (Cohen's kappa) |
 | Latency (live calls) | `UserBotLatencyObserver` per turn, `evals/latency_report.py` | High |
+
+### Online evals: scoring real calls
+
+`uv run python -m evals.online` scores the day's real calls (IST) from their saved transcripts (`--all` for every call, `--no-judge` for the free rule checks only). Rule checks: no loan details before verification (past-call dates included), a goodbye was spoken (not required when the caller hung up), the outcome record is consistent with what happened (a promise has a date, a "sent" link was actually sent, hardship and disputes escalated, the agent closed with `end_call`), and no banned phrases (legal action, police, visiting the home, telling family). The judge adds tone, empathy, naturalness, guardrail violations and whether the recorded outcome matches what the borrower said. Scores go to Langfuse on the call's session, with stable ids so a re-run updates them. `results/online/<date>.md` lists each call flagged for human review, with the reason, the evidence line and the transcript path.
+
+First run, over all 39 saved live calls: 13 flagged. 11 were missing goodbyes: 10 of 23 calls on 16 Nov, before the `goodbye` field fix, and 1 of 9 since, which ended on the filler "Sure, I'm sending that to you now" instead of a closing. One was an early call whose outcome record was saved incomplete. One was Sneha's hardship call (empathy 1: "hung up with a curt 'Thank you for your time'"). The judge found the recorded outcome matched the conversation on 39/39 calls, with 0 guardrail violations and 0 disclosures before verification. It also noticed the agent switching from Hindi to English mid-call. Writing these checks surfaced one false positive ("have a good day" wasn't counted as a goodbye), which is now fixed and tested.
+
+### Judge calibration
+
+`uv run python -m evals.calibrate template results/online/all.jsonl --sample 30` writes `results/calibration/labels.csv`: one row per call, with the judge's verdicts left out so the reviewer isn't anchored by them. A person fills in tone, empathy and naturalness (1–5) and guardrail_violation and outcome_correct (yes/no). Then `uv run python -m evals.calibrate compare results/calibration/labels.csv results/online/all.jsonl` reports per criterion: raw agreement, Cohen's kappa, and for the 1–5 scores agreement within one point plus quadratic-weighted kappa. For yes/no criteria it counts each direction of disagreement ("judge missed a violation" is worse than "judge flagged a clean call"). It works on offline eval runs too (`results/<run>/runs.jsonl`). **Human labels haven't been collected yet**, so the judge's trust level above is still "medium, spot-checked". One data point so far: two judge runs over the same 39 calls gave empathy means of 3.46 and 3.54.
+
+### CI and prompt versions
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`:
+- **Unit tests** (`uv run pytest`).
+- **An eval gate:** the 7 scenarios tagged `subsets: [ci]` in `scenarios.yaml` (pay on time, promise to pay, hardship, family member, failed verification, prompt injection, payment-link failure), 1 run each, rule checks only (about $0.30). `--min-pass-rate 0.85` fails the build if fewer than 6 of 7 pass. It needs an `ANTHROPIC_API_KEY` repository secret and is skipped without one (for example, on pull requests from forks). Results are uploaded as a build artifact.
+
+Every outcome record, history row, eval summary and trace carries `prompt_version`. It is the `PROMPT_VERSION` constant in `agent/prompts.py`, pinned in `agent/prompt_versions.json` to a hash of the system prompt and every tool description. Editing any of that wording without bumping the version fails a unit test, so a prompt change is always deliberate, and a regression can be traced to the wording that caused it. A run with un-pinned edits is labelled `goals-v1+dirty-<hash>` rather than passing as the old version.
+
+### STT accuracy (WER) on amounts, dates and digits
+
+`uv run python -m evals.wer` (`--engine nova` for the fallback STT) plays 21 sentences callers actually say, in English, Hindi and Hinglish (`evals/wer_cases.yaml`: DOBs, last-four digits, amounts, payment dates), through the live bot's Flux settings in real time. It reports WER and **entity accuracy**: whether each date, digit string and amount came through, in any spelling (digits, English words or Hindi words).
+
+| STT | Language | WER raw / normalised | Entities correct |
+|---|---|---|---|
+| Flux multilingual (live) | English | 1% / 1% | 13/13 |
+| | Hindi | 9% / 0% | 10/10 |
+| | Hinglish | 2% / 2% | 5/5 |
+| Nova-3 multi (fallback) | English / Hindi / Hinglish | 2% / 13% / 0% raw | 28/28 |
+
+"Normalised" maps month names and number words to one token in either script: Flux often writes "December" in a Hindi sentence, which is correct. **These are upper bounds.** The clips are synthesised by Cartesia, which is much cleaner than a caller on a phone line, and live transcripts do show garbling ("pay on the pixel", handled by the confirm-back rule). Each case can point to a real recording (`audio:`). Recording 20 real clips, ideally over a phone line, is the way to get real numbers.
 
 **Latest full run (Sonnet 5.5):** 38/38 runs pass, 0 guardrail violations, tone 4.87, empathy 3.97, naturalness 4.32; every goodbye spoken; prompt cache hit on 153 of 158 LLM calls. Payment-link failure: 3/3, tone 5.0.
 
@@ -116,20 +195,22 @@ Full write-up: [REPORT.md](REPORT.md).
 
 Measured on live browser calls from India with the current setup (Flux, Sonnet 5.5, Cartesia, templated turns): 25 turns across 8 calls. Each turn runs from the moment the caller stops speaking until Asha's first audio plays. Source: `UserBotLatencyObserver`, logged per turn to `outcomes/latency.jsonl`.
 
-| Layer | What happens | Median | Range |
-|---|---|---|---|
-| Endpointing wait | VAD confirms the caller has gone quiet (`stop_secs`) | 0.20s | fixed |
-| Speech-to-text | Deepgram Flux final transcript (includes ~0.35s network round trip to the US) | 0.27s | 0.10–0.92s |
-| Turn detection | Flux decides the turn is over (eager end-of-turn; the LLM already started) | 0.00s | 0–0.01s |
-| LLM | Claude Sonnet 5.5, time to first spoken token (cached prompt, low effort) | 1.09s | 0.71–1.30s (5.98s on one uncached first turn, now fixed) |
-| LLM tool call (tool turns only) | Generating the tool call before the filler or template plays | 0.57s | 0.23–2.84s |
-| Tool handler | Our code (`verify_identity`, `check_payment_status`) | 0.01s | |
-| Sentence wait (sentence mode only) | First full sentence before TTS starts | 0.68s | one turn measured |
-| Text-to-speech | Cartesia Sonic-3, time to first audio | 0.35s | 0.12–0.74s |
-| Pipeline | Frame handling, transport | 0.13s | 0–0.64s |
-| **Total, voice to voice** | | **2.25s** | 1.42–2.67s at p10–p90 (7.17s worst, the uncached first turn) |
+| Layer | What happens | p50 | p95 | Range |
+|---|---|---|---|---|
+| Endpointing wait | VAD confirms the caller has gone quiet (`stop_secs`) | 0.20s | 0.20s | fixed |
+| Speech-to-text | Deepgram Flux final transcript (includes ~0.35s network round trip to the US) | 0.27s | 0.65s | 0.10–0.92s |
+| Turn detection | Flux decides the turn is over (eager end-of-turn; the LLM already started) | 0.00s | 0.01s | |
+| LLM | Claude Sonnet 5.5, time to first spoken token (cached prompt, low effort) | 1.09s | 2.14s | 0.71–5.98s (the max was one uncached first turn, now fixed) |
+| LLM tool call (tool turns only) | Generating the tool call before the filler or template plays | 0.57s | 2.84s | 0.23–2.84s (9 turns) |
+| Tool handler | Our code (`verify_identity`, `check_payment_status`) | 0.01s | 0.01s | |
+| Sentence wait (sentence mode only) | First full sentence before TTS starts | 0.68s | | one turn measured |
+| Text-to-speech | Cartesia Sonic-3, time to first audio | 0.29s | 0.74s | 0.12–0.74s |
+| Pipeline | Frame handling, transport | 0.13s | 0.63s | 0–0.64s |
+| **Total, voice to voice** | | **2.25s** | **4.72s** | 1.42–7.17s; p90 2.87s |
 
-Split by turn type: replies the LLM answers directly have a median of **2.24s**; turns with a tool call have a median of **2.37s**. On tool turns the caller hears a filler line ("Thanks, one moment") at that point, so the wait for the real answer is covered.
+Percentiles are nearest-rank, from `uv run python -m evals.latency_report`. Split by turn type: replies the LLM answers directly have a p50 of **2.22s**; turns with a tool call have a p50 of **2.37s**. On tool turns the caller hears a filler line ("Thanks, one moment") at that point, so the wait for the real answer is covered. With 25 turns, p95 is set by the two slowest, so it will move as more calls are logged.
+
+**Interruption rate** (the share of Asha's turns the caller cut off) is logged per turn to `outcomes/turns.jsonl` from 21 Nov and shown by the same report. The calls above predate it, so there is no number yet.
 
 The LLM is about half of every turn. The model comparison in finding 14 showed that the fastest open-weight models would save about 0.3s, but they failed the safety checks. The next largest fixed cost is the network round trip from India to US-hosted STT and LLM endpoints.
 
@@ -207,13 +288,20 @@ What drives it:
 ```
 agent/      bot.py (Pipecat pipeline), prompts.py (goals-based prompt), tools.py (tool registry),
             templates.py, phrases.py, speech.py, call_state.py, history.py, recovery.py,
+            redact.py (PII masking), compliance.py (calling hours), tracing.py (Langfuse over OTel),
+            audit.py (hash-chained audit log), retention.py (retention and erasure),
             recording.py, transcripts.py, usage_observer.py, borrowers.py, config.py,
             web.py (borrower picker), use_borrower.py
 config/     lenders/<lender>/{lender,en,hi}.yaml: names and every fixed phrase, per language
 data/       borrowers.json (8 mock borrowers), payments.json (mock payment records),
             call_history_seed.json (demo history)
 evals/      scenarios.yaml, simulator.py, text_agent.py (Claude + OpenAI-compatible hosts),
-            metrics.py, run_evals.py, latency_report.py, bench_llm.py
+            metrics.py, run_evals.py, latency_report.py, bench_llm.py,
+            online.py (scores real calls), calibrate.py (judge vs human labels),
+            wer.py + wer_cases.yaml (STT accuracy)
 tests/      unit tests: guardrails, registry, phrase packs, templates, call history, recovery,
-            recording, noise filter
+            recording, noise filter, security (lockout, dates, PII, admin page, calling hours), tracing
+docker-compose.langfuse.yml   local Langfuse for traces
+.github/workflows/ci.yml      unit tests + eval gate on every PR
+agent/prompt_versions.json    PROMPT_VERSION -> prompt hash, with a note per version
 ```

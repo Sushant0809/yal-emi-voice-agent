@@ -11,13 +11,14 @@ from pathlib import Path
 
 import anthropic
 
+from agent import templates
 from agent.borrowers import Borrower
 from agent.call_state import CallState
 from agent.config import CONFIG, model_supports_effort
 from agent.prompts import build_system_prompt, first_message_instruction
-from agent import templates
 from agent.speech import to_spoken
 from agent.tools import closing_line, run_tool, tool_specs
+
 
 def anthropic_tools() -> list[dict]:
     return [
@@ -35,7 +36,9 @@ class TextAgent:
         self.client = client
         self.model = model or CONFIG.agent_model
         self.thinking = thinking or CONFIG.agent_thinking
-        self.state = CallState(borrower=borrower, language=borrower.preferred_language, history_db=history_db)
+        # Simulated calls are audited next to their throwaway history, never in the real log.
+        self.state = CallState(borrower=borrower, language=borrower.preferred_language, history_db=history_db,
+                               audit_path=Path(history_db).parent / "audit.jsonl")
         self.system = build_system_prompt(borrower)
         self.messages: list[dict] = []
         self.events: list[dict] = []  # tool calls and timings, for the metrics

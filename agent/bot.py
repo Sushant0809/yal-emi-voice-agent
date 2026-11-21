@@ -47,16 +47,17 @@ from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from agent import retention, templates, tracing, transcripts
 from agent.borrowers import get_borrower
 from agent.call_state import CallState, Outcome
+from agent.compliance import within_calling_hours
 from agent.config import CONFIG, ROOT, model_supports_effort
-from agent.prompts import build_system_prompt, first_message_instruction
-from agent import templates
 from agent.phrases import lender
-from agent.recovery import BotSpeechObserver, CallRecovery, context_id_from_error
-from agent.speech import detect_language, spoken_transform
-from agent import transcripts
+from agent.prompts import build_system_prompt, first_message_instruction, prompt_version
 from agent.recording import CallRecorder
+from agent.recovery import BotSpeechObserver, CallRecovery, context_id_from_error
+from agent.redact import redact, redact_log_record
+from agent.speech import detect_language, spoken_transform
 from agent.tools import REGISTRY, closing_line, run_tool, tool_specs
 from agent.usage_observer import LLMUsageObserver
 
@@ -183,7 +184,15 @@ def _borrower_id(runner_args: RunnerArguments) -> str:
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     state = CallState(borrower=get_borrower(_borrower_id(runner_args)))
     state.language = state.borrower.preferred_language
-    logger.info(f"Calling {state.borrower.borrower_id} ({state.borrower.name}), call {state.call_id}")
+    logger.info(f"Calling {state.borrower.borrower_id}, call {state.call_id}")
+    # Enforced in code: outside the window the call is never placed (no greeting, no record).
+    outside_hours = CONFIG.enforce_calling_hours and not within_calling_hours()
+    if outside_hours:
+        logger.warning(f"Outside calling hours ({CONFIG.calling_hours} IST): not calling. "
+                       "Set ENFORCE_CALLING_HOURS=false to test outside them.")
+
+    # Retention: delete recordings and transcripts past RETENTION_DAYS, off the call's path.
+    retention_task = asyncio.create_task(asyncio.to_thread(retention.purge_in_background))  # noqa: F841 (keep a reference)
 
     stt = _build_stt()
     tts = CartesiaTTSService(
@@ -211,8 +220,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     # Tools: one Pipecat handler that delegates to the framework-free run_tool().
     async def handle_tool(params: FunctionCallParams):
-        result = await run_tool(state, params.function_name, dict(params.arguments))
-        logger.info(f"tool {params.function_name}({dict(params.arguments)}) -> {result}")
+        with tracing.tool_span(worker, params.function_name, dict(params.arguments)) as record:
+            result = await run_tool(state, params.function_name, dict(params.arguments))
+            record(result)
+        logger.info(f"tool {params.function_name}({redact(dict(params.arguments))}) -> {redact(result)}")
         if params.function_name == "verify_identity":
             line = templates.reminder(state.borrower, result, speaking_language["value"]) if CONFIG.templated_turns else None
             if line:
@@ -222,11 +233,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 return
             filler = LENDER.phrase(speaking_language["value"], "fillers.verify_identity")
             await worker.queue_frames([TTSSpeakFrame(filler)])  # covers the LLM pass that follows
-        if REGISTRY[params.function_name].ends_call:
+        if REGISTRY[params.function_name].ends_call and state.ended:  # not recorded: let the LLM retry
             if line := closing_line(dict(params.arguments), spoke_this_turn["text"], state.language):
                 await params.llm.push_frame(TTSSpeakFrame(line))
             await params.result_callback(result, properties=FunctionCallResultProperties(run_llm=False))
-            await asyncio.to_thread(state.save)
+            await save_outcome()
             logger.info(f"Outcome: {json.dumps(state.outcome.model_dump(mode='json'))}")
             # The goodbye was queued ahead of this; EndWorkerFrame flushes it, then hangs up.
             await params.llm.push_frame(EndWorkerFrame())
@@ -263,7 +274,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     context = LLMContext(tools=tools)
     # Runs while WebRTC is still connecting, so the greeting hits a warm cache.
-    prewarm = asyncio.create_task(prewarm_llm(llm, context, system_prompt))
+    prewarm = asyncio.create_task(prewarm_llm(llm, context, system_prompt) if not outside_hours else asyncio.sleep(0))
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -304,6 +315,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+        # One Langfuse trace per call (agent/tracing.py); off unless Langfuse keys are set.
+        enable_tracing=tracing.enabled(),
+        conversation_id=state.call_id,
+        additional_span_attributes=tracing.call_attributes(
+            call_id=state.call_id, borrower_id=state.borrower.borrower_id, prompt_version=prompt_version(),
+            model=CONFIG.agent_model, lender=CONFIG.lender, language=state.borrower.preferred_language,
+        ) if tracing.enabled() else None,
         observers=[
             latency,
             LLMUsageObserver(state.call_id, CONFIG.outcomes_dir / "llm_usage.jsonl"),
@@ -337,6 +355,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             recovery.on_tts_no_audio(frame.error, context_id_from_error(frame.error))
         elif frame.processor is stt:
             recovery.on_stt_error(frame.error)
+    async def save_outcome() -> None:
+        """Persist the outcome (idempotent) and put it on the call's trace."""
+        await asyncio.to_thread(state.save)
+        tracing.annotate_outcome(worker, state.outcome.model_dump(mode="json") if state.outcome else None)
+
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)
 
@@ -349,6 +372,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             f.write(json.dumps({"call_id": state.call_id, **breakdown.model_dump(mode="json")}) + "\n")
         for line in breakdown.turn_contribution_lines():
             logger.debug(f"latency {line}")
+
+    # Per-turn record of barge-ins (Pipecat's turn tracker), for the interruption rate in
+    # evals/latency_report.py. Pipecat also marks the turn still open at hang-up as interrupted;
+    # `call_ended` lets the report tell that apart from the caller cutting Asha off.
+    turns_log = CONFIG.outcomes_dir / "turns.jsonl"
+    if worker.turn_tracking_observer:
+        @worker.turn_tracking_observer.event_handler("on_turn_ended")
+        async def on_turn_ended(tracker, turn_number, duration, was_interrupted):
+            with open(turns_log, "a") as f:
+                f.write(json.dumps({"call_id": state.call_id, "turn": turn_number, "duration_secs": round(duration, 3),
+                                    "was_interrupted": was_interrupted, "call_ended": state.ended}) + "\n")
 
     @user_aggregator.event_handler("on_user_turn_stopped")
     async def on_user_turn_stopped(aggregator, strategy, message):
@@ -371,11 +405,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             await worker.queue_frames([TTSSpeakFrame(text)])
             return
         state.finalize(Outcome.NO_RESPONSE, notes="Caller went silent; ended after idle prompts.")
-        await asyncio.to_thread(state.save)
+        await save_outcome()
         await worker.queue_frames([TTSSpeakFrame(LENDER.phrase(speaking_language["value"], "idle_goodbye")), EndWorkerFrame()])
 
     @worker.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
+        if outside_hours:
+            await worker.queue_frames([EndWorkerFrame()])
+            return
         if CONFIG.templated_turns:
             # Greeting from a template: plays as soon as the call connects, no LLM wait.
             note = templates.CALL_CONNECTED_NOTE.format(name=state.borrower.name)
@@ -387,11 +424,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        if not state.ended:
+        if not state.ended and not outside_hours:
             state.finalize(Outcome.DISCONNECTED, notes="Caller hung up before the call was closed.")
         # Always save (it's idempotent): an outcome can be final yet unsaved if the end_call
         # path failed partway, as happened live when end_call raised after finalizing.
-        await asyncio.to_thread(state.save)
+        await save_outcome()
         await runner.cancel()
 
     try:
@@ -400,6 +437,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         prewarm.cancel()
         recovery.cancel()
         await asyncio.to_thread(state.save)  # belt and braces; no-op if already saved
+        await asyncio.to_thread(tracing.flush)  # send this call's spans now (background export otherwise)
         if recorder:
             try:
                 await recorder.save()
@@ -423,11 +461,14 @@ def _ensure_file_log() -> None:
     if not _file_log_added:
         CONFIG.outcomes_dir.mkdir(parents=True, exist_ok=True)
         logger.add(CONFIG.outcomes_dir / "bot.log", level="DEBUG", rotation="20 MB")
+        # Mask DOBs, phone digits and the like in every log line, Pipecat's transcripts included.
+        logger.configure(patcher=redact_log_record)
         _file_log_added = True
 
 
 async def bot(runner_args: RunnerArguments):
     _ensure_file_log()
+    tracing.setup()  # no-op without Langfuse keys, and after the first call
     transport = await create_transport(
         runner_args,
         {

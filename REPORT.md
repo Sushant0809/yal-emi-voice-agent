@@ -10,7 +10,7 @@
 | Calls ending with a spoken goodbye | 38/38 |
 | Agent lines with raw digits or "₹" (would be read out badly) | 0 |
 | Prompt cache hits | 153 of 158 LLM calls |
-| Live calls, voice-to-voice latency | median **2.25s**, p90 2.67s (25 turns, 8 calls) |
+| Live calls, voice-to-voice latency | median **2.25s**, p95 4.72s (25 turns, 8 calls) |
 
 The evals also decided the model: two other Claude settings and two open-weight models were faster, and each failed safety checks that Sonnet passes (see "Model choice").
 
@@ -108,6 +108,14 @@ The weakest scores are tone 4.0 on `failed_verification` and `stop_calling`: bot
 **Fix.** The prompt now says previous calls are background, not the agenda: remind and find intent first, and the outcome describes this call only.
 **Eval.** The new `prior_hardship_now_paying` scenario passes 3/3, and the broken-promise scenarios still pass. Side finding: the broken-promise check failed on "the tenth" and the Hindi "दस तारीख", so the metric itself was too strict and now accepts alternatives.
 
+### 4. On real calls: what the online evals caught
+`evals/online.py` replays the rule checks and the judge over saved live transcripts. On the 39 calls so far it flagged 13 for review:
+- 11 calls without a spoken goodbye: 10 of the 23 calls on 16 Nov (failure 1, before the fix) and 1 of 9 since. That one ended on the filler "Sure, I'm sending that to you now".
+- An early call whose outcome record was saved incomplete.
+- Sneha's hardship call, scored empathy 1.
+
+The judge agreed with every recorded outcome (39/39) and found no guardrail violations. The first version of the goodbye check had a false positive ("have a good day"), so the online checks have their own tests. The judge itself hasn't been calibrated against human labels yet: `evals/calibrate.py` (Cohen's kappa per criterion) is ready, but the labelling sheet is still empty.
+
 Other failures (eager Hindi switching, a lost promise date when the caller hung up mid-close, garbled dates accepted silently, a provider drop-out leaving 17s of silence, the first reply missing the prompt cache) are written up in the README's findings 1–14.
 
 ## Model choice
@@ -131,15 +139,15 @@ Qwen 3.8 and Haiku both score about 98% on Pipecat's general voice benchmark. Ou
 
 `uv run python -m evals.latency_report --since 20261118T1722` (25 turns, 8 calls, current setup):
 
-| Layer | Median | Range |
-|---|---|---|
-| Endpointing wait (VAD) | 0.20s | fixed |
-| Speech-to-text (Deepgram Flux) | 0.27s | 0.10–0.92s |
-| Turn detection (Flux eager end-of-turn) | 0.00s | |
-| LLM time to first token (Sonnet 5.5) | 1.09s | 0.71–1.30s typical |
-| LLM tool call (tool turns only) | 0.57s | 0.23–2.84s |
-| Text-to-speech first audio (Cartesia) | 0.35s | 0.12–0.74s |
-| Pipeline / transport | 0.13s | 0–0.64s |
-| **Total** | **2.25s** | p90 2.67s |
+| Layer | p50 | p95 | Range |
+|---|---|---|---|
+| Endpointing wait (VAD) | 0.20s | 0.20s | fixed |
+| Speech-to-text (Deepgram Flux) | 0.27s | 0.65s | 0.10–0.92s |
+| Turn detection (Flux eager end-of-turn) | 0.00s | 0.01s | |
+| LLM time to first token (Sonnet 5.5) | 1.09s | 2.14s | 0.71–5.98s |
+| LLM tool call (tool turns only) | 0.57s | 2.84s | 0.23–2.84s |
+| Text-to-speech first audio (Cartesia) | 0.29s | 0.74s | 0.12–0.74s |
+| Pipeline / transport | 0.13s | 0.63s | 0–0.64s |
+| **Total** | **2.25s** | **4.72s** | 1.42–7.17s; p90 2.87s |
 
 Down from 2.6–5.1s on the first live call. The worst turn measured (7.17s) was a first turn that missed the prompt cache, since fixed. On tool turns a filler line plays while the tool runs. Cost is about $0.05 per one-minute call (README, "Cost per call").

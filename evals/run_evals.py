@@ -3,6 +3,7 @@
     uv run python -m evals.run_evals                 # all scenarios, 3 runs each
     uv run python -m evals.run_evals -s hardship -n 5
     uv run python -m evals.run_evals --no-judge      # rule checks only (cheaper)
+    uv run python -m evals.run_evals --subset ci --no-judge -n 1 --min-pass-rate 0.9   # the CI gate
 
 Writes results/<timestamp>/{runs.jsonl, summary.md}.
 """
@@ -23,6 +24,7 @@ from agent.borrowers import get_borrower
 from agent.call_state import Outcome
 from agent.config import ROOT
 from agent.history import record_call
+from agent.prompts import prompt_version
 from evals.metrics import judge, rule_checks
 from evals.simulator import HANGUP, BorrowerSimulator
 from evals.text_agent import PROVIDERS, OpenAICompatTextAgent, TextAgent
@@ -113,7 +115,10 @@ def summarise(results: list[dict]) -> str:
         vals = [r["checks"][key] for r in rs if key in r["checks"]]
         return f"{sum(vals)}/{len(vals)}" if vals else "-"
 
+    passed = sum(all(r["checks"].values()) for r in results)
     lines = [
+        f"Prompt version {prompt_version()}: {passed}/{len(results)} runs pass ({passed / max(len(results), 1):.0%}).",
+        "",
         "| scenario | outcome | disclosure-safe | closed | ptp date | escalation | judge tone | judge violations | avg turns |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
@@ -162,11 +167,16 @@ async def main():
     parser.add_argument("--agent-model", help="Override AGENT_MODEL (e.g. claude-haiku-4-5, groq:openai/gpt-oss-120b, cerebras:gpt-oss-120b)")
     parser.add_argument("--thinking", choices=["adaptive", "between_tools"], help="Override AGENT_THINKING")
     parser.add_argument("--tag", default="", help="Suffix for the results folder name")
+    parser.add_argument("--subset", help="Only scenarios tagged with this subset in scenarios.yaml (e.g. ci)")
+    parser.add_argument("--min-pass-rate", type=float,
+                        help="Exit with status 1 if fewer than this share of runs pass (for CI)")
     args = parser.parse_args()
 
     scenarios = yaml.safe_load(SCENARIOS_PATH.read_text())["scenarios"]
     if args.scenario:
         scenarios = [s for s in scenarios if s["id"] in args.scenario]
+    if args.subset:
+        scenarios = [s for s in scenarios if args.subset in s.get("subsets", [])]
 
     client = anthropic.AsyncAnthropic()
     sem = asyncio.Semaphore(args.concurrency)
@@ -189,6 +199,12 @@ async def main():
     summary = summarise(results)
     (out / "summary.md").write_text(summary + "\n")
     print("\n" + summary + f"\n\nSaved to {out}")
+    if args.min_pass_rate is not None:
+        rate = sum(all(r["checks"].values()) for r in results) / max(len(results), 1)
+        if rate < args.min_pass_rate:
+            print(f"\nFAIL: pass rate {rate:.0%} is below the required {args.min_pass_rate:.0%}")
+            raise SystemExit(1)
+        print(f"\nOK: pass rate {rate:.0%} meets the required {args.min_pass_rate:.0%}")
 
 
 if __name__ == "__main__":

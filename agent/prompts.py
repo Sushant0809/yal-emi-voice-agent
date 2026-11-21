@@ -5,7 +5,10 @@ through the verify_identity tool result, so before verification there is nothing
 in the context to leak, whatever the caller says.
 """
 
+import hashlib
+import json
 from datetime import date
+from pathlib import Path
 
 from agent.borrowers import Borrower
 from agent.phrases import lender
@@ -72,3 +75,31 @@ def build_system_prompt(borrower: Borrower, today: date | None = None) -> str:
 
 def first_message_instruction(borrower: Borrower) -> str:
     return FIRST_MESSAGE_INSTRUCTION.format(full_name=borrower.name)
+
+
+# Bump this when you change the prompt or any tool's description or schema, and add the new
+# version's content hash (and a note on what changed) to agent/prompt_versions.json. tests/test_prompt_version.py fails until
+# you do, so a prompt change is always deliberate and every outcome record, eval run and trace
+# names the exact wording it ran with.
+PROMPT_VERSION = "goals-v1"
+VERSIONS_PATH = Path(__file__).with_name("prompt_versions.json")
+
+
+def content_hash() -> str:
+    """Hash of everything the model is instructed with: the system prompt template, the
+    first-message instruction and every registered tool's description and schema."""
+    from agent.tools import tool_specs  # lazy: tools.py is heavier and imports more
+
+    blob = json.dumps([SYSTEM_PROMPT, FIRST_MESSAGE_INSTRUCTION, tool_specs()], sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()[:10]
+
+
+def prompt_version() -> str:
+    """PROMPT_VERSION if the wording matches what that version recorded; otherwise the label plus
+    the actual hash ("goals-v1+dirty-1a2b3c"), so an un-bumped edit can't pass as the old version."""
+    h = content_hash()
+    try:
+        known = json.loads(VERSIONS_PATH.read_text()).get(PROMPT_VERSION, {}).get("hash")
+    except (OSError, ValueError, AttributeError):
+        known = None
+    return PROMPT_VERSION if known == h else f"{PROMPT_VERSION}+dirty-{h}"

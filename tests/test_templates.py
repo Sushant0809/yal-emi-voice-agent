@@ -3,7 +3,16 @@ from agent.templates import greeting, reminder
 
 
 def test_greeting_by_language():
-    assert greeting(get_borrower("LF-1001")) == "Hello, this is Asha calling from Lumen Finance. Am I speaking with Rahul Sharma?"
+    assert greeting(get_borrower("LF-1001"), recorded=False) == (
+        "Hello, this is Asha calling from Lumen Finance. Am I speaking with Rahul Sharma?")
+
+
+def test_recorded_calls_say_so_before_asking_anything():
+    en = greeting(get_borrower("LF-1001"), recorded=True)
+    assert en == ("Hello, this is Asha calling from Lumen Finance. This call is recorded for quality and "
+                  "training. Am I speaking with Rahul Sharma?")
+    hi = greeting(get_borrower("LF-1003"), recorded=True)
+    assert "रिकॉर्ड" in hi and hi.index("रिकॉर्ड") < hi.index("क्या मेरी बात")
     assert "Lumen Finance" in greeting(get_borrower("LF-1003")) and "अमित" not in greeting(get_borrower("LF-1003"))
 
 

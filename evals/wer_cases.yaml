@@ -1,0 +1,101 @@
+# STT accuracy cases for evals/wer.py: what borrowers actually say on these calls, weighted
+# towards the parts that matter: dates of birth, last-four digits, amounts and payment dates.
+#
+# lang: en | hi | mixed (Hinglish, the way callers code-switch; spoken by TTS in Hindi mode)
+# entities: what must come through the transcript intact, whatever the spelling:
+#   {digits: "2345"}                       digit string, spoken digit by digit
+#   {amount: 12500}                        rupees
+#   {date: "1990-03-14"} / {date: "--12-05"} (day and month only) / {day: 27}
+# audio: optional path to a real recording of this sentence, used instead of synthesised speech
+#   (e.g. record yourself; the synthesised voice is clearer than a real caller on a phone line).
+
+cases:
+  # --- English -----------------------------------------------------------------------------
+  - id: en_dob_1
+    lang: en
+    text: My date of birth is the fourteenth of March, nineteen ninety.
+    entities: [{date: "1990-03-14"}]
+  - id: en_dob_2
+    lang: en
+    text: It's twenty-first June, nineteen seventy-nine.
+    entities: [{date: "1979-06-21"}]
+  - id: en_dob_3
+    lang: en
+    text: I was born on the second of October, nineteen eighty-eight.
+    entities: [{date: "1988-10-02"}]
+  - id: en_last4_1
+    lang: en
+    text: The last four digits are two three four five.
+    entities: [{digits: "2345"}]
+  - id: en_last4_2
+    lang: en
+    text: Zero zero one one.
+    entities: [{digits: "0011"}]
+  - id: en_last4_3
+    lang: en
+    text: It ends in six seven eight nine.
+    entities: [{digits: "6789"}]
+  - id: en_pay_1
+    lang: en
+    text: I'll pay twelve thousand five hundred rupees on the fifth of December.
+    entities: [{amount: 12500}, {date: "--12-05"}]
+  - id: en_pay_2
+    lang: en
+    text: I can pay four thousand eight hundred and fifty by the twenty-seventh.
+    entities: [{amount: 4850}, {day: 27}]
+  - id: en_paid
+    lang: en
+    text: I already paid seven thousand two hundred on the seventeenth of November.
+    entities: [{amount: 7200}, {date: "--11-17"}]
+  - id: en_lakh
+    lang: en
+    text: The amount is one lakh twenty-five thousand rupees.
+    entities: [{amount: 125000}]
+
+  # --- Hindi -------------------------------------------------------------------------------
+  - id: hi_dob_1
+    lang: hi
+    text: मेरी जन्मतिथि चौदह मार्च उन्नीस सौ नब्बे है।
+    entities: [{date: "1990-03-14"}]
+  - id: hi_dob_2
+    lang: hi
+    text: मेरा जन्म इक्कीस जून उन्नीस सौ उन्यासी को हुआ था।
+    entities: [{date: "1979-06-21"}]
+  - id: hi_last4_1
+    lang: hi
+    text: आख़िरी चार अंक दो तीन चार पाँच हैं।
+    entities: [{digits: "2345"}]
+  - id: hi_last4_2
+    lang: hi
+    text: नंबर के आख़िरी अंक शून्य शून्य एक एक हैं।
+    entities: [{digits: "0011"}]
+  - id: hi_pay_1
+    lang: hi
+    text: मैं पाँच दिसंबर तक बारह हज़ार पाँच सौ रुपये भर दूँगा।
+    entities: [{amount: 12500}, {date: "--12-05"}]
+  - id: hi_pay_2
+    lang: hi
+    text: अड़तीस हज़ार दो सौ रुपये मैं तीस नवंबर को दूँगा।
+    entities: [{amount: 38200}, {date: "--11-30"}]
+  - id: hi_paid
+    lang: hi
+    text: मैंने सत्रह नवंबर को सात हज़ार दो सौ रुपये भर दिए।
+    entities: [{amount: 7200}, {date: "--11-17"}]
+
+  # --- Hinglish (as heard on live calls) -----------------------------------------------------
+  - id: mixed_dob
+    lang: mixed
+    text: मेरी date of birth चौदह March उन्नीस सौ नब्बे है।
+    entities: [{date: "1990-03-14"}]
+  - id: mixed_last4
+    lang: mixed
+    text: Last four digits हैं दो तीन चार पाँच।
+    entities: [{digits: "2345"}]
+  - id: mixed_pay_day
+    lang: mixed
+    text: Salary आने के बाद मैं twenty-seventh को payment कर दूँगा।
+    entities: [{day: 27}]
+  - id: mixed_amount
+    lang: mixed
+    text: मैं twelve thousand five hundred rupees पाँच December को pay करूँगा।
+    entities: [{amount: 12500}, {date: "--12-05"}]

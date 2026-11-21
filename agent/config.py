@@ -62,6 +62,30 @@ class Config:
     # Borrower to call when the browser client doesn't pick one
     default_borrower_id: str = os.getenv("DEFAULT_BORROWER_ID", "LF-1001")
 
+    # Security and compliance
+    # Failed identity checks across ALL calls (since the last success, within the window) before
+    # verification is refused outright. Stops someone guessing two DOBs per call, call after call.
+    verification_lockout_failures: int = int(os.getenv("VERIFICATION_LOCKOUT_FAILURES", "3"))
+    verification_lockout_hours: float = float(os.getenv("VERIFICATION_LOCKOUT_HOURS", "24"))
+    # RBI's rules for loan recovery calls: only between 8am and 7pm, borrower's local time (IST).
+    calling_hours: str = os.getenv("CALLING_HOURS", "08:00-19:00")
+    enforce_calling_hours: bool = os.getenv("ENFORCE_CALLING_HOURS", "true").lower() == "true"
+    # Token for the /borrowers admin page and its API. Unset: a random one is printed at start-up.
+    admin_token: str = os.getenv("ADMIN_TOKEN", "")
+    # Named tokens, "name:token,name2:token2", so the audit log records WHO used the page.
+    admin_tokens: str = os.getenv("ADMIN_TOKENS", "")
+    # Days to keep call recordings and transcripts (agent/retention.py). 0 = keep forever.
+    retention_days: int = int(os.getenv("RETENTION_DAYS", "30"))
+
+    # Tracing (agent/tracing.py): on when both Langfuse keys are set.
+    langfuse_host: str = os.getenv("LANGFUSE_HOST", "http://localhost:3000").rstrip("/")
+    langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+    langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
+    # "redacted": conversation text is traced with PII masked. "none": no conversation text at all.
+    trace_content: str = os.getenv("TRACE_CONTENT", "redacted")
+    # Key for hashing borrower ids in traces (defaults to the Langfuse secret key).
+    trace_id_salt: str = os.getenv("TRACE_ID_SALT", "")
+
     record_calls: bool = os.getenv("RECORD_CALLS", "true").lower() == "true"
     # Which lender's phrase packs to use: config/lenders/<LENDER>/
     lender: str = os.getenv("LENDER", "lumen")

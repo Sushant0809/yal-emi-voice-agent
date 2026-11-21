@@ -1,7 +1,8 @@
 # Hindi phrase pack. Amounts and dates are verbalised in Hindi by agent/speech.py
 # ("अड़तीस हज़ार दो सौ रुपये", "एक दिसंबर"). The brand stays in Latin script.
 
-greeting: "नमस्ते, मैं {lender} से {agent_name} बोल रही हूँ। क्या मेरी बात {name} जी से हो रही है?"
+greeting: "नमस्ते, मैं {lender} से {agent_name} बोल रही हूँ।{recording_notice} क्या मेरी बात {name} जी से हो रही है?"
+recording_notice: "यह कॉल गुणवत्ता और ट्रेनिंग के लिए रिकॉर्ड की जा रही है।"
 
 reminder_due: >-
   धन्यवाद {first_name} जी, वेरिफ़िकेशन हो गया। आपके {loan_type} की {amount} की किस्त

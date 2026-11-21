@@ -1,0 +1,6 @@
+{
+  "goals-v1": {
+    "hash": "681d50f14a",
+    "notes": "Goals-based prompt with the tool registry (no tool names in the prompt); end_call.goodbye carries everything still to say; verify_identity takes exactly one factor per check."
+  }
+}

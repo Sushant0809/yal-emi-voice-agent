@@ -5,6 +5,8 @@ description = "Conversational EMI reminder voice agent for Lumen Finance (Pipeca
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "opentelemetry-exporter-otlp-proto-http>=1.33",
+    "opentelemetry-sdk>=1.33",
     "pipecat-ai[anthropic,cartesia,deepgram,local-smart-turn-v3,rnnoise,runner,silero,webrtc]>=1.16.0",
     "pydantic>=2.14.3",
     "python-dotenv>=1.2.4",

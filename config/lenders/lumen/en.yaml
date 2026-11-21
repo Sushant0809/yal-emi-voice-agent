@@ -2,7 +2,9 @@
 # with amounts and dates already in spoken form ("twelve thousand five hundred rupees").
 # Allowed placeholders per phrase are checked at start-up (agent/phrases.py).
 
-greeting: "Hello, this is {agent_name} calling from {lender}. Am I speaking with {name}?"
+# {recording_notice} is the line below when calls are recorded (RECORD_CALLS=true), else empty.
+greeting: "Hello, this is {agent_name} calling from {lender}.{recording_notice} Am I speaking with {name}?"
+recording_notice: "This call is recorded for quality and training."
 
 # Spoken right after a successful verification (no previous calls), instead of waiting
 # for the LLM. With previous calls the LLM writes it, since history needs judgement.

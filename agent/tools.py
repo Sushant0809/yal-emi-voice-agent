@@ -6,19 +6,27 @@ the live call.
 """
 
 import asyncio
+import hashlib
 import json
 import random
 import re
-import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from loguru import logger
+
+from agent import audit
 from agent.borrowers import check_identity
-from agent.call_state import CallState, Outcome
+from agent.call_state import MAX_VERIFICATION_ATTEMPTS, CallState, Outcome
 from agent.config import CONFIG, ROOT
-from agent.history import recent_calls, summarise_for_agent
+from agent.history import (
+    failed_verifications,
+    recent_calls,
+    record_verification_attempt,
+    summarise_for_agent,
+)
 from agent.phrases import lender
 from agent.speech import date_to_words, rupees_to_words, verbaliser
 
@@ -33,14 +41,29 @@ async def _verify_identity(state: CallState, args: dict) -> dict:
     if state.verification_locked:
         return {"verified": False, "note": "Too many attempts. Do not discuss the account. End the call politely."}
 
-    state.verification_attempts += 1
-    ok = check_identity(state.borrower, dob=args.get("dob"), phone_last4=args.get("phone_last4"))
-    if not ok:
-        remaining = max(0, 2 - state.verification_attempts)
-        return {"verified": False, "attempts_remaining": remaining}
+    dob = (args.get("dob") or "").strip()
+    last4 = (args.get("phone_last4") or "").strip()
+    # One factor per attempt: passing both would be two guesses for the price of one.
+    if bool(dob) == bool(last4):
+        what = "both a date of birth and mobile digits" if dob else "no date of birth or mobile digits"
+        return {"verified": False, "note": f"Got {what}. Check exactly one of them. This did not count as an attempt."}
 
-    state.verified = True
     b = state.borrower
+    # Lockout across calls: someone guessing two DOBs per call, call after call.
+    failed = await asyncio.to_thread(failed_verifications, b.borrower_id, CONFIG.verification_lockout_hours,
+                                     state.history_db)
+    if failed >= CONFIG.verification_lockout_failures:
+        state.locked_out = True
+        await _audit("verification_locked", state, failed_checks=failed)
+        return {"verified": False, "note": "Too many failed attempts recently. Do not discuss the account. "
+                                           "Say the team will be in touch, and end the call politely."}
+
+    state.verification_attempts += 1
+    ok = check_identity(b, dob=dob or None, phone_last4=last4 or None)
+    await asyncio.to_thread(record_verification_attempt, b.borrower_id, state.call_id, ok, state.history_db)
+    if not ok:
+        return {"verified": False, "attempts_remaining": max(0, MAX_VERIFICATION_ATTEMPTS - state.verification_attempts)}
+
     details = b.loan_details()
     # Pre-rendered spoken forms so the model doesn't have to verbalise numbers itself.
     details["emi_amount_spoken"] = rupees_to_words(b.emi_amount)
@@ -54,20 +77,45 @@ async def _verify_identity(state: CallState, args: dict) -> dict:
     if b.is_overdue:
         details["overdue_amount_spoken_hi"] = hi.amount(b.overdue_amount)
     result = {"verified": True, "loan": details}
-    # Cross-call memory, released only now that the caller is verified.
-    previous = await asyncio.to_thread(recent_calls, b.borrower_id, 3, state.history_db)
-    if previous:
-        result["previous_calls"] = summarise_for_agent(previous)
+    # Cross-call memory, released only now that the caller is verified. Optional: a history
+    # read failure must not cost a verified caller their reminder.
+    try:
+        previous = await asyncio.to_thread(recent_calls, b.borrower_id, 3, state.history_db)
+        if previous:
+            result["previous_calls"] = summarise_for_agent(previous)
+    except Exception as e:
+        logger.warning(f"Call history unavailable for {b.borrower_id}: {e}")
+    # Only now: if building the result had failed, the caller would be "verified" with no
+    # loan details in context, and every gated tool would open for a call that has stalled.
+    state.verified = True
+    await _audit("disclose_loan_details", state, previous_calls=len(result.get("previous_calls", [])))
     return result
 
 
+async def _audit(action: str, state: CallState, **details) -> None:
+    """The agent's own access to borrower data goes in the audit log too. Never breaks a call."""
+    try:
+        await asyncio.to_thread(audit.record, "agent", action, state.borrower.borrower_id,
+                                path=state.audit_path, call_id=state.call_id, **details)
+    except Exception as e:
+        logger.warning(f"Audit write failed ({action}, call unaffected): {e}")
+
+
 async def _send_payment_link(state: CallState, args: dict) -> dict:
-    # Simulated provider latency and failures, to exercise filler speech and recovery.
-    await asyncio.sleep(CONFIG.payment_link_delay_secs)
-    if random.random() < CONFIG.payment_link_failure_rate:
-        return {"sent": False, "error": "SMS provider timed out. Apologise and offer to try again or have the team resend it."}
-    state.payment_link_sent = True
-    return {"sent": True, "link_id": f"pl_{secrets.token_hex(4)}", "channel": "SMS to registered mobile"}
+    # Idempotent: one link per call, even if the model asks twice or calls it twice in one turn.
+    async with state.link_lock:
+        if state.payment_link_id:
+            return {"sent": True, "already_sent": True, "link_id": state.payment_link_id,
+                    "note": "Already sent on this call; don't send another. Tell them it's on its way."}
+        # Simulated provider latency and failures, to exercise filler speech and recovery.
+        await asyncio.sleep(CONFIG.payment_link_delay_secs)
+        if random.random() < CONFIG.payment_link_failure_rate:
+            return {"sent": False, "error": "SMS provider timed out. Apologise and offer to try again or have the team resend it."}
+        # The call id is the idempotency key a real SMS provider would get, so a retried
+        # request after a timeout can't send a second message.
+        state.payment_link_id = "pl_" + hashlib.sha256(state.call_id.encode()).hexdigest()[:8]
+        state.payment_link_sent = True
+        return {"sent": True, "link_id": state.payment_link_id, "channel": "SMS to registered mobile"}
 
 
 async def _check_payment_status(state: CallState, args: dict) -> dict:
@@ -83,13 +131,32 @@ async def _check_payment_status(state: CallState, args: dict) -> dict:
     }
 
 
+def _promise_date(value: str | None, today: date) -> tuple[str | None, str]:
+    """A promise-to-pay date the record can trust, or None plus a note saying why it was dropped.
+    Stored dates are read back on later calls, so "next Friday" must never reach the database."""
+    if not value:
+        return None, ""
+    try:
+        promised = date.fromisoformat(value.strip())
+    except ValueError:
+        return None, f"Promise date not recorded: {value!r} is not a calendar date."
+    if promised < today:
+        return None, f"Promise date not recorded: {value} is in the past."
+    return promised.isoformat(), ""
+
+
 async def _end_call(state: CallState, args: dict) -> dict:
+    try:
+        outcome = Outcome(args.get("outcome"))
+    except ValueError:
+        return {"error": f"Unknown outcome {args.get('outcome')!r}. Call this again with one from the list."}
+    promise, problem = _promise_date(args.get("promise_to_pay_date"), date.today())
     record = state.finalize(
-        Outcome(args["outcome"]),
-        promise_to_pay_date=args.get("promise_to_pay_date"),
+        outcome,
+        promise_to_pay_date=promise,
         callback_time=args.get("callback_time"),
         escalate_to_human=bool(args.get("escalate_to_human")),
-        notes=args.get("notes", ""),
+        notes=" ".join(x for x in (args.get("notes", ""), problem) if x),
     )
     return {"recorded": True, "outcome": record.outcome.value}
 
@@ -125,8 +192,9 @@ register(Tool(
     name="verify_identity",
     description=(
         "Check that the person is the borrower, using their date of birth or the last four digits "
-        "of their registered mobile number. Use it once they have confirmed their name and given a "
-        "COMPLETE answer (day, month and year, or exactly four digits); if what you heard is "
+        "of their registered mobile number: pass exactly ONE of the two per check. Use it once they "
+        "have confirmed their name and given a COMPLETE answer (day, month and year, or exactly "
+        "four digits); if what you heard is "
         "incomplete, ask for the missing part first, because a failed check uses up one of only two "
         "attempts. Don't re-check details that already failed. On success it returns the loan "
         "details (with amounts and dates already in spoken form) and any previous calls; nothing "

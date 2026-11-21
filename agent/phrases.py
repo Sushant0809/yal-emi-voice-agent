@@ -21,7 +21,8 @@ LENDERS_DIR = ROOT / "config" / "lenders"
 
 # key -> placeholders it may use. Dotted keys address nested sections.
 SCHEMA: dict[str, set[str]] = {
-    "greeting": {"name", "first_name", "agent_name", "lender"},
+    "greeting": {"name", "first_name", "agent_name", "lender", "recording_notice"},
+    "recording_notice": set(),
     "reminder_due": {"first_name", "loan_type", "amount", "due_date"},
     "reminder_overdue": {"first_name", "loan_type", "amount", "due_date", "days_overdue"},
     "fillers.verify_identity": set(),

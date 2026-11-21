@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen
+      # Includes the prompt-version check: wording changes must bump PROMPT_VERSION.
+      - run: uv run pytest -q
+
+  evals:
+    name: Eval gate (CI subset, rule checks)
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Mock tools: no artificial delay in CI.
+      PAYMENT_LINK_DELAY_SECS: "0"
+      PAYMENT_CHECK_DELAY_SECS: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip without an API key (e.g. pull requests from forks)
+        if: env.ANTHROPIC_API_KEY == ''
+        run: echo "::notice::ANTHROPIC_API_KEY secret not set; eval gate skipped."
+      - uses: astral-sh/setup-uv@v6
+        if: env.ANTHROPIC_API_KEY != ''
+        with:
+          enable-cache: true
+      - if: env.ANTHROPIC_API_KEY != ''
+        run: uv python install 3.12 && uv sync --frozen
+      # 7 scenarios tagged `subsets: [ci]` in evals/scenarios.yaml, 1 run each, no judge (about $0.30).
+      # Fails the build if fewer than 85% pass (6 of 7 allows one flaky simulator run).
+      - name: Run eval subset
+        if: env.ANTHROPIC_API_KEY != ''
+        run: uv run python -m evals.run_evals --subset ci --no-judge -n 1 --min-pass-rate 0.85 --tag ci
+      - uses: actions/upload-artifact@v4
+        if: always() && env.ANTHROPIC_API_KEY != ''
+        with:
+          name: eval-results
+          path: results/

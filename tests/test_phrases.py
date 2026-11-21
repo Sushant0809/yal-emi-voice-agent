@@ -14,7 +14,7 @@ def _copy_lumen(tmp_path):
 def test_shipped_packs_are_valid():
     lumen = load_lender("lumen")
     assert lumen.languages == ("en", "hi")
-    assert lumen.phrase("hi", "greeting", name="Amit Verma", first_name="Amit").startswith("नमस्ते, मैं Lumen Finance से आशा")
+    assert lumen.phrase("hi", "greeting", name="Amit Verma", first_name="Amit", recording_notice="").startswith("नमस्ते, मैं Lumen Finance से आशा")
 
 
 def test_new_lender_needs_no_code(tmp_path):
@@ -23,7 +23,7 @@ def test_new_lender_needs_no_code(tmp_path):
     meta.update(name="Acme Credit", agent_name="Priya", agent_names={})
     (folder / "lender.yaml").write_text(yaml.safe_dump(meta, allow_unicode=True))
     acme = load_lender("acme", root=tmp_path)
-    assert acme.phrase("en", "greeting", name="Rahul Sharma", first_name="Rahul") == (
+    assert acme.phrase("en", "greeting", name="Rahul Sharma", first_name="Rahul", recording_notice="") == (
         "Hello, this is Priya calling from Acme Credit. Am I speaking with Rahul Sharma?"
     )
 
