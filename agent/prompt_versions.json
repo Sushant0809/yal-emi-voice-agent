@@ -2,5 +2,9 @@
   "goals-v1": {
     "hash": "681d50f14a",
     "notes": "Goals-based prompt with the tool registry (no tool names in the prompt); end_call.goodbye carries everything still to say; verify_identity takes exactly one factor per check."
+  },
+  "goals-v2": {
+    "hash": "e283dd2cda",
+    "notes": "end_call: promise_to_pay_date must be a real date, today or later; otherwise nothing is recorded and the model gets an error, so it confirms the date first."
   }
 }

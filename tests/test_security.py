@@ -30,23 +30,19 @@ def new_call(db, bid="LF-1002"):
 # --- promise_to_pay_date ------------------------------------------------------------------
 
 
-async def test_unparseable_promise_date_is_not_stored(db):
+END = {"goodbye": "Bye.", "outcome": "promise_to_pay", "escalate_to_human": False, "notes": "Paying soon."}
+
+
+@pytest.mark.parametrize("bad", ["next Friday", "2026-02-30", (date.today() - timedelta(days=1)).isoformat()])
+async def test_invalid_promise_date_is_refused_before_anything_is_recorded(db, bad):
     state = new_call(db)
     state.verified = True
-    await run_tool(state, "end_call", {"goodbye": "Bye.", "outcome": "promise_to_pay", "escalate_to_human": False,
-                                       "notes": "Paying soon.", "promise_to_pay_date": "next Friday"})
-    assert state.outcome.promise_to_pay_date is None
-    assert "not a calendar date" in state.outcome.notes and state.outcome.notes.startswith("Paying soon.")
-
-
-async def test_past_promise_date_is_not_stored_but_future_one_is(db):
-    past, future = new_call(db), new_call(db)
-    yesterday, next_week = date.today() - timedelta(days=1), date.today() + timedelta(days=7)
-    args = {"goodbye": "Bye.", "outcome": "promise_to_pay", "escalate_to_human": False, "notes": ""}
-    await run_tool(past, "end_call", {**args, "promise_to_pay_date": yesterday.isoformat()})
-    await run_tool(future, "end_call", {**args, "promise_to_pay_date": next_week.isoformat()})
-    assert past.outcome.promise_to_pay_date is None and "in the past" in past.outcome.notes
-    assert future.outcome.promise_to_pay_date == next_week.isoformat()
+    result = await run_tool(state, "end_call", {**END, "promise_to_pay_date": bad})
+    assert "error" in result and "Confirm the exact date" in result["error"]
+    assert not state.ended  # the bot hands the error back to the LLM, which asks and calls again
+    good = (date.today() + timedelta(days=7)).isoformat()
+    await run_tool(state, "end_call", {**END, "promise_to_pay_date": good})
+    assert state.outcome.promise_to_pay_date == good and state.outcome.notes == "Paying soon."
 
 
 async def test_unknown_outcome_is_refused_so_the_call_is_not_hung_up(db):
@@ -113,6 +109,15 @@ async def test_attempts_remaining_counts_down_from_the_limit(db):
     assert (first["attempts_remaining"], second["attempts_remaining"]) == (1, 0)
 
 
+async def test_attempts_remaining_counts_the_cross_call_budget(db):
+    call1 = new_call(db)
+    await run_tool(call1, "verify_identity", {"dob": "2000-01-01"})
+    await run_tool(call1, "verify_identity", {"dob": "2000-01-02"})
+    call2 = new_call(db)  # 1 try left this call by itself, but the 3rd failure overall locks out
+    first = await run_tool(call2, "verify_identity", {"dob": "2000-01-03"})
+    assert first["attempts_remaining"] == 0
+
+
 async def test_failures_lock_out_across_calls(db):
     call1 = new_call(db)
     await run_tool(call1, "verify_identity", {"dob": "2000-01-01"})
@@ -152,9 +157,44 @@ def test_redact_masks_tool_args_and_free_text_but_keeps_call_ids():
     assert rest == "20261121T101010123456, 1.09s"
 
 
+async def test_real_verify_result_logs_no_loan_details(db):
+    import json
+
+    state = new_call(db, "LF-1001")
+    result = await run_tool(state, "verify_identity", {"dob": "1990-03-14"})
+    assert result["verified"] is True and result["loan"]["emi_amount_inr"] == 12500
+    logged = json.dumps(redact(result), ensure_ascii=False)
+    assert redact(result)["loan"] == MASK
+    for leak in ("12500", "twelve thousand", "बारह", "fifth of December", "Personal Loan"):
+        assert leak not in logged
+
+
+async def test_payment_lookup_logs_no_amounts(db):
+    import json
+
+    state = new_call(db, "LF-1008")
+    await run_tool(state, "verify_identity", {"phone_last4": "0011"})
+    logged = json.dumps(redact(await run_tool(state, "check_payment_status", {})), ensure_ascii=False)
+    assert "7200" not in logged and "seven thousand" not in logged
+
+
+@pytest.mark.parametrize("line", [
+    # Pipecat's DEBUG lines carry the LLM context and every TTS line in plain text.
+    "Generating chat: [{'role': 'assistant', 'content': 'Your EMI of twelve thousand five hundred rupees is due on the fifth of December.'}]",
+    "TTS: overdue 4,850 (four thousand eight hundred and fifty) since 10 November",
+    "TTS: आपके पर्सनल लोन की बारह हज़ार पाँच सौ रुपये की किस्त पाँच दिसंबर को देय है",
+    "TTS: बारह हजार पांच सौ रुपए",  # written without nukta or chandrabindu
+])
+def test_spoken_amounts_and_due_dates_are_masked_in_log_lines(line):
+    out = redact_text(line)
+    for leak in ("twelve thousand", "fifth of December", "4,850", "four thousand", "10 November", "बारह", "दिसंबर"):
+        assert leak not in out
+
+
 def test_redact_reaches_nested_results():
-    out = redact({"verified": False, "previous_calls": [{"notes": "Call back on 98765 43210"}]})
-    assert "98765" not in out["previous_calls"][0]["notes"]
+    out = redact({"verified": False, "history": [{"notes": "Call back on 98765 43210"}]})
+    assert "98765" not in out["history"][0]["notes"]
+    assert redact({"previous_calls": [{"notes": "x"}]})["previous_calls"] == MASK  # loan info: masked whole
 
 
 # --- payment link -------------------------------------------------------------------------
@@ -172,6 +212,17 @@ async def test_payment_link_is_sent_once_per_call(db, monkeypatch):
 
 
 # --- calling hours ------------------------------------------------------------------------
+
+
+def test_outside_hours_line_in_each_language_reveals_nothing():
+    from agent.templates import outside_hours
+    from evals.metrics import leak_patterns
+
+    for bid, word in (("LF-1001", "calling hours"), ("LF-1003", "कॉल करने का समय")):
+        b = get_borrower(bid)
+        line = outside_hours(b)
+        assert word in line and "Lumen Finance" in line
+        assert not any(p in line.lower() for p in leak_patterns(b))
 
 
 @pytest.mark.parametrize("ist, allowed", [("07:59", False), ("08:00", True), ("13:30", True),

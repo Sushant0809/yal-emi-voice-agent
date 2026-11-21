@@ -81,7 +81,7 @@ def first_message_instruction(borrower: Borrower) -> str:
 # version's content hash (and a note on what changed) to agent/prompt_versions.json. tests/test_prompt_version.py fails until
 # you do, so a prompt change is always deliberate and every outcome record, eval run and trace
 # names the exact wording it ran with.
-PROMPT_VERSION = "goals-v1"
+PROMPT_VERSION = "goals-v2"
 VERSIONS_PATH = Path(__file__).with_name("prompt_versions.json")
 
 

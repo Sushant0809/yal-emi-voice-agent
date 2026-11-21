@@ -23,6 +23,7 @@ LENDERS_DIR = ROOT / "config" / "lenders"
 SCHEMA: dict[str, set[str]] = {
     "greeting": {"name", "first_name", "agent_name", "lender", "recording_notice"},
     "recording_notice": set(),
+    "outside_hours": {"agent_name", "lender"},
     "reminder_due": {"first_name", "loan_type", "amount", "due_date"},
     "reminder_overdue": {"first_name", "loan_type", "amount", "due_date", "days_overdue"},
     "fillers.verify_identity": set(),

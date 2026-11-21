@@ -3,6 +3,7 @@
 
 greeting: "नमस्ते, मैं {lender} से {agent_name} बोल रही हूँ।{recording_notice} क्या मेरी बात {name} जी से हो रही है?"
 recording_notice: "यह कॉल गुणवत्ता और ट्रेनिंग के लिए रिकॉर्ड की जा रही है।"
+outside_hours: "नमस्ते, मैं {lender} से {agent_name} बोल रही हूँ। अभी हमारे कॉल करने का समय नहीं है, हम आपको कल फिर कॉल करेंगे। धन्यवाद।"
 
 reminder_due: >-
   धन्यवाद {first_name} जी, वेरिफ़िकेशन हो गया। आपके {loan_type} की {amount} की किस्त

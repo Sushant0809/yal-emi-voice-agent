@@ -62,7 +62,11 @@ async def _verify_identity(state: CallState, args: dict) -> dict:
     ok = check_identity(b, dob=dob or None, phone_last4=last4 or None)
     await asyncio.to_thread(record_verification_attempt, b.borrower_id, state.call_id, ok, state.history_db)
     if not ok:
-        return {"verified": False, "attempts_remaining": max(0, MAX_VERIFICATION_ATTEMPTS - state.verification_attempts)}
+        # Whichever runs out first: this call's tries, or the borrower's budget across calls
+        # (`failed` was counted before this attempt, so it's one higher now).
+        this_call = MAX_VERIFICATION_ATTEMPTS - state.verification_attempts
+        across_calls = CONFIG.verification_lockout_failures - (failed + 1)
+        return {"verified": False, "attempts_remaining": max(0, min(this_call, across_calls))}
 
     details = b.loan_details()
     # Pre-rendered spoken forms so the model doesn't have to verbalise numbers itself.
@@ -132,16 +136,16 @@ async def _check_payment_status(state: CallState, args: dict) -> dict:
 
 
 def _promise_date(value: str | None, today: date) -> tuple[str | None, str]:
-    """A promise-to-pay date the record can trust, or None plus a note saying why it was dropped.
+    """A promise-to-pay date the record can trust, or None plus the reason it can't be used.
     Stored dates are read back on later calls, so "next Friday" must never reach the database."""
     if not value:
         return None, ""
     try:
         promised = date.fromisoformat(value.strip())
     except ValueError:
-        return None, f"Promise date not recorded: {value!r} is not a calendar date."
+        return None, f"{value!r} is not a calendar date."
     if promised < today:
-        return None, f"Promise date not recorded: {value} is in the past."
+        return None, f"{value} is in the past (today is {today.isoformat()})."
     return promised.isoformat(), ""
 
 
@@ -151,12 +155,15 @@ async def _end_call(state: CallState, args: dict) -> dict:
     except ValueError:
         return {"error": f"Unknown outcome {args.get('outcome')!r}. Call this again with one from the list."}
     promise, problem = _promise_date(args.get("promise_to_pay_date"), date.today())
+    if problem:  # nothing recorded and the call stays open, like an unknown outcome
+        return {"error": f"Not recorded: promise_to_pay_date {problem} Confirm the exact date with them "
+                         "(day and month), then call this again with it as YYYY-MM-DD."}
     record = state.finalize(
         outcome,
         promise_to_pay_date=promise,
         callback_time=args.get("callback_time"),
         escalate_to_human=bool(args.get("escalate_to_human")),
-        notes=" ".join(x for x in (args.get("notes", ""), problem) if x),
+        notes=args.get("notes", ""),
     )
     return {"recorded": True, "outcome": record.outcome.value}
 
@@ -261,7 +268,9 @@ register(Tool(
         },
         "outcome": {"type": "string", "enum": [o.value for o in Outcome if o is not Outcome.DISCONNECTED],
                     "description": "What happened on THIS call (never a copy of an earlier call's outcome)."},
-        "promise_to_pay_date": {"type": "string", "description": "YYYY-MM-DD, if they committed to a date."},
+        "promise_to_pay_date": {"type": "string", "description": (
+            "YYYY-MM-DD, if they committed to a date. Must be a real date, today or later; otherwise "
+            "nothing is recorded and you get an error, so confirm the date with them first.")},
         "callback_time": {"type": "string", "description": "When to call back, if they asked for a callback."},
         "escalate_to_human": {"type": "boolean", "description": "True for disputes, hardship, or if they asked for a person."},
         "notes": {"type": "string", "description": "One sentence a human agent would find useful."},

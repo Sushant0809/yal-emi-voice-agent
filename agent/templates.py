@@ -35,6 +35,11 @@ def greeting(borrower: Borrower, recorded: bool | None = None) -> str:
     return L.phrase(lang, "greeting", name=borrower.name, first_name=borrower.first_name, recording_notice=notice)
 
 
+def outside_hours(borrower: Borrower) -> str:
+    """Said instead of the greeting outside calling hours, before hanging up. No loan details."""
+    return lender().phrase(borrower.preferred_language, "outside_hours")
+
+
 def reminder(borrower: Borrower, verify_result: dict, language: str) -> str | None:
     """The post-verification reminder, or None when the LLM should write it instead."""
     if not verify_result.get("verified") or verify_result.get("previous_calls"):

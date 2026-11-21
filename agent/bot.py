@@ -188,8 +188,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # Enforced in code: outside the window the call is never placed (no greeting, no record).
     outside_hours = CONFIG.enforce_calling_hours and not within_calling_hours()
     if outside_hours:
-        logger.warning(f"Outside calling hours ({CONFIG.calling_hours} IST): not calling. "
-                       "Set ENFORCE_CALLING_HOURS=false to test outside them.")
+        logger.warning(f"OUTSIDE CALLING HOURS ({CONFIG.calling_hours} IST): call {state.call_id} will only hear "
+                       "the outside-hours line, then hang up. Set ENFORCE_CALLING_HOURS=false to test now.")
 
     # Retention: delete recordings and transcripts past RETENTION_DAYS, off the call's path.
     retention_task = asyncio.create_task(asyncio.to_thread(retention.purge_in_background))  # noqa: F841 (keep a reference)
@@ -411,7 +411,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     @worker.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
         if outside_hours:
-            await worker.queue_frames([EndWorkerFrame()])
+            # In this browser demo the caller starts the call, so say why it's ending rather than
+            # hang up in silence. (A real dialer would never place the call outside the window.)
+            line = templates.outside_hours(state.borrower)
+            logger.warning(f"Outside calling hours: said {line!r} and hung up (call {state.call_id})")
+            await worker.queue_frames([TTSSpeakFrame(line), EndWorkerFrame()])
             return
         if CONFIG.templated_turns:
             # Greeting from a template: plays as soon as the call connects, no LLM wait.
